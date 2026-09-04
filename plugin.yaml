@@ -1,0 +1,97 @@
+%YAML 1.1
+---
+
+# Metadata for the Smart-Plugin
+plugin:
+    # Global plugin attributes
+    type: interface                 # plugin type (gateway, interface, protocol, system, web)
+    description:
+        de: 'Lesen und Schreiben von Werten einer Viessmann Heizung mit Open3E'
+        en: 'Read and write data of a Viessmann heating system using OPen3E'
+    maintainer: sisamiwe
+    tester:
+    keywords: viessmann  open3e
+    state: ready                    # change to ready when done with development
+    version: 0.0.1                  # Plugin version
+    sh_minversion: 1.12.0            # minimum shNG version to use this plugin
+    py_minversion: 3.12
+    multi_instance: false           # plugin supports multi instance
+    restartable: true
+    classname: Open3E            # class containing the plugin
+    support: 
+
+parameters:
+
+    pause_item:
+        type: str
+        default: ''
+        description:
+            de: 'Item, um die Ausführung des Plugins zu steuern'
+            en: 'item for controlling plugin execution'
+
+    can_port:
+        type: str
+        default: 'can0'
+        description:
+            de: 'CAN-Bus-Port, mit dem das Gerät verbunden ist'
+            en: 'CAN bus port the device is connected to'
+    read_cycle:
+        type: num
+        default: 60
+        description:
+            de: 'Standard-Intervall in Sekunden für das Lesekommando'
+            en: 'Default interval in seconds for the read command'
+
+item_attributes:
+    # Definition of item attributes defined by this plugin
+    open3e_ecu:
+        type: str
+        description:
+            de: 'Konfiguriert die ECU (Geräte-ID) des Gerätes'
+            en: 'Configures the ECU (device ID) of the device'
+
+    open3e_did:
+        type: str
+        description:
+            de: 'Konfiguriert die Datenpunkt-ID (DID) des Items und ggf. den Pfad zu einem verschachtelten Wert im JSON-Response der Heizung'
+            en: 'Configures the data point ID (DID) of the item and optionally the path to a nested value in the JSON response of the heating system'
+
+    open3e_write:
+        type: bool
+        description:
+            de: 'Änderung des Items wird mit konfiguriertem DID an die Heizung geschickt'
+            en: 'Changes to this item result in sending the configured DID to the heating system'
+
+    open3e_read_afterwrite:
+        type: int
+        description:
+            de: 'Konfiguriert eine Verzögerung in Sekunden nachdem ein Lesekommando nach einem Schreibkommando an die Heizung geschickt wird'
+            en: 'Configures delay in seconds to issue a read command after write command'
+
+    open3e_read_cycle:
+        type: int
+        description:
+            de: 'Liest Wert mit konfiguriertem DID im Intervall aus.'
+            en: 'The item value should be read by using the configured DID'
+
+    open3e_read_init:
+        type: bool
+        default: False
+        description:
+            de: 'Konfiguriert, ob der Wert initialisiert werden soll'
+            en: 'Configures to initialize the item value with the value'
+
+    open3e_update_all:
+        type: bool
+        description:
+            de: 'Liest alle konfigurierten Items neu, wenn es auf True gesetzt wird'
+            en: 'Triggers reading of all configured items if set to True'
+
+
+item_structs: NONE
+
+
+logic_parameters: NONE
+
+
+plugin_functions: NONE

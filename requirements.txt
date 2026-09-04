@@ -1,0 +1,10 @@
+# CAN-Bus Anbindung
+python-can>=4.2.0
+
+# Diagnostik- & ISO-Protokolle für Viessmann E3
+udsoncan>=1.21.0
+can-isotp>=2.0.0
+
+doipclient
+
+open3e
