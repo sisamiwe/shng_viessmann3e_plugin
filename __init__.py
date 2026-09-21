@@ -34,6 +34,7 @@ from __future__ import annotations
 import sys
 import os
 import time
+import datetime
 import json
 import importlib.util
 from typing import Any, Dict, List, Tuple, Callable, Optional
@@ -41,6 +42,7 @@ from pathlib import Path
 from collections import defaultdict
 
 from .open3e_client import Open3EClient
+from .open3e_scanner import Open3EScanner
 
 if __name__ == '__main__':
     class SmartPlugin():
@@ -82,7 +84,7 @@ class Open3E(SmartPlugin):
         ALLOW_MULTIINSTANCE (bool): Flag, ob Mehrfachinstanzen erlaubt sind.
     """
 
-    PLUGIN_VERSION = '0.0.1'
+    PLUGIN_VERSION = '0.0.2'
     ALLOW_MULTIINSTANCE = False
 
     def __init__(self, sh=None, *args, standalone: str = '', logger=None, **kwargs) -> None:
@@ -99,6 +101,8 @@ class Open3E(SmartPlugin):
 
         self._pause_item = None
         self.devices: Dict[str, Dict[str, Any]] = {}
+
+        self.ecu_dids: Dict = {}
 
         if standalone:
             self.canport = standalone
@@ -161,7 +165,8 @@ class Open3E(SmartPlugin):
         """Analysiert Item-Attribute beim Start von SmartHomeNG.
 
         Liest die Item-Attribute `open3e_read_cycle`, `open3e_read_init`,
-        `open3e_write`, `open3e_ecu` etc. aus und registriert das Item.
+        `open3e_write`, `open3e_read_afterwrite`, `open3e_ecu` etc. aus
+        und registriert das Item (unterstützt kombiniertes Lesen und Schreiben).
 
         Args:
             item: Das zu analysierende SmartHomeNG Item-Objekt.
@@ -177,23 +182,24 @@ class Open3E(SmartPlugin):
             self.add_item(item, updating=True)
             return self.update_item
 
-        # Sonstige Attribute
+        # Sonderfall: Update All Trigger Item
         open3e_update_all = self.get_iattr_value(item.conf, 'open3e_update_all')
         if open3e_update_all:
             self.logger.debug(f"parse_item: open3e_update_all auf {item.property.path}")
             self.add_item(item, updating=True)
             return self.update_item
         
-        # Direct Types
-        open3e_read_init = self.get_iattr_value(item.conf, 'open3e_read_init')
-        open3e_read_cycle = self.get_iattr_value(item.conf, 'open3e_read_cycle') or 0
-        open3e_write = self.get_iattr_value(item.conf, 'open3e_write')
+        # 2. Attribute auslesen
+        open3e_read_init = bool(self.get_iattr_value(item.conf, 'open3e_read_init'))
+        open3e_read_cycle = int(self.get_iattr_value(item.conf, 'open3e_read_cycle') or 0)
+        open3e_write = bool(self.get_iattr_value(item.conf, 'open3e_write'))
+        open3e_read_after_write = int(self.get_iattr_value(item.conf, 'open3e_read_after_write') or 0)
 
         # Abbruch, wenn weder Lese- noch Schreibregel aktiv sind
         if not (open3e_read_init or open3e_read_cycle > 0 or open3e_write):
             return None
 
-        # 2. Gemeinsame Attribute auflösen & konvertieren
+        # 3. ECU & DID verarbeiten
         raw_ecu = self.get_iattr_value(item.conf, 'open3e_ecu')
         try:
             ecu = int(raw_ecu, 0) if raw_ecu is not None else None
@@ -201,61 +207,49 @@ class Open3E(SmartPlugin):
             ecu = raw_ecu
 
         raw_did = self.get_iattr_value(item.conf, 'open3e_did')
-
         did = None
         sub_path = None
 
         if raw_did is not None:
             item_did_str = str(raw_did).strip()
 
-            # Trennung bei Punkt (z.B. "318.Actual")
+            # Trennung bei Punkt (z.B. "318.Actual" oder "491.State")
             if '.' in item_did_str:
                 did_part, sub_path = item_did_str.split('.', 1)
             else:
                 did_part = item_did_str
 
-            # DID in Ganzzahl umwandeln, falls möglich
             try:
                 did = int(did_part)
             except (ValueError, TypeError):
                 did = did_part
-                self.logger.warning(f"DID '{did_part}' definied in item {item.property.path} invalid. Item will be skipped")
-                return
+                self.logger.warning(f"DID '{did_part}' defined in item {item.property.path} invalid. Item will be skipped.")
+                return None
 
-        needs_update_handler = False
+        # 4. Kombinierte Konfiguration erstellen
+        is_read_active = open3e_read_init or open3e_read_cycle > 0
+        nexttime = 0.0 if open3e_read_init else (time.time() + open3e_read_cycle if open3e_read_cycle > 0 else 0.0)
 
-        # 3. Lese-Konfiguration (Read)
-        if open3e_read_init or open3e_read_cycle > 0:
-            nexttime = 0 if open3e_read_init else time.time() + open3e_read_cycle
+        item_config = {
+            'ecu': ecu,
+            'did': did,
+            'sub_path': sub_path,
+            'read': is_read_active,
+            'read_cycle': open3e_read_cycle,
+            'read_init': open3e_read_init,
+            'nexttime': nexttime,
+            'write': open3e_write,
+            'read_after_write': open3e_read_after_write
+        }
 
-            read_config = {
-                'ecu': ecu,
-                'did': did,
-                'sub_path': sub_path,
-                'read': True,
-                'read_cycle': open3e_read_cycle,
-                'read_init': open3e_read_init,
-                'nexttime': nexttime
-            }
-            self.logger.debug(f"parse_item [READ]: {item.property.path} -> {read_config}")
-            self.add_item(item, mapping=did, config_data_dict=read_config, updating=False)
+        self.logger.debug(f"parse_item [READ={is_read_active}, WRITE={open3e_write}]: {item.property.path} -> {item_config}")
 
-        # 4. Schreib-Konfiguration (Write)
-        if open3e_write:
-            read_after_write = bool(self.get_iattr_value(item.conf, 'open3e_read_after_write'))
+        # 5. Item EINMALIG registrieren
+        # updating=True registriert den Change-Listener in SmartHomeNG, falls geschrieben werden kann
+        self.add_item(item, mapping=did, config_data_dict=item_config, updating=open3e_write)
 
-            write_config = {
-                'ecu': ecu,
-                'did': did,
-                'sub_path': sub_path,
-                'write': True,
-                'read_after_write': read_after_write
-            }
-            self.logger.debug(f"parse_item [WRITE]: {item.property.path} -> {write_config}")
-            self.add_item(item, mapping=did, config_data_dict=write_config, updating=True)
-            needs_update_handler = True
-
-        return self.update_item if needs_update_handler else None
+        # Wenn open3e_write aktiv ist, muss update_item als Listener zurückgegeben werden
+        return self.update_item if open3e_write else None
 
     def parse_logic(self, logic) -> None:
         """Verarbeitet Logiken (vom Plugin-Framework vorgegeben).
@@ -275,7 +269,7 @@ class Open3E(SmartPlugin):
             dest (str, optional): Ziel der Änderung.
         """
         if item is self._pause_item:
-            if caller != self.get_shortname():
+            if caller != self.get_fullname():
                 self.logger.debug(f'pause item changed to {item()}')
                 if item() and self.alive:
                     self.stop()
@@ -284,19 +278,25 @@ class Open3E(SmartPlugin):
             return
 
         if self.alive and caller != self.get_fullname():
-            self.logger.info(
-                f"update_item: '{item.property.path}' has been changed outside this plugin "
-                f"by caller '{self.callerinfo(caller, source)}'"
-            )
+            self.logger.info(f"update_item: '{item.property.path}' has been changed outside this plugin by caller '{self.callerinfo(caller, source)}'")
 
+            # read all dids
             open3e_update_all = self.get_iattr_value(item.conf, 'open3e_update_all')
             if open3e_update_all:
                 self.logger.info(f"Update all Items called")
                 self.poll_all_data()
                 item(False, caller=self.get_fullname())
 
-    def on_item_change(self, item, caller=None, source=None, dest=None) -> None:
+            # write to did
+            open3e_write = self.get_iattr_value(item.conf, 'open3e_write')
+            if open3e_write:
+                self.handle_item_change(item, caller=caller, source=source, dest=dest)
+
+    def handle_item_change(self, item, caller=None, source=None, dest=None) -> None:
         """Verarbeitet Änderungen an Schreib-Items und überträgt Werte via CAN-Bus.
+
+        Schreibt den Wert auf die entsprechende ECU und plant bei Erfolg
+        optional ein asynchrones Nachlesen (read_after_write) im Scheduler ein.
 
         Args:
             item: Das geänderte Item-Objekt.
@@ -306,18 +306,20 @@ class Open3E(SmartPlugin):
         """
         if caller == self.get_fullname():
             return
+
         item_config = self.get_item_config(item)
         if not item_config.get("write", False):
             return
 
         ecu = item_config.get("ecu")
         write_did = item_config.get("did")
-        read_after_write = item_config.get("read_after_write", 5)
+        sub_path = item_config.get("sub_path")
+        read_after_write = item_config.get("read_after_write", 0)
         new_val = item()
 
         self.logger.info(f"on_item_change: Item {item.property.path} -> Schreibe DID {write_did} an Geraet {ecu}: Wert = {new_val}")
 
-        # Direkt-Lookup im Clients-Dict über Adresse/Name
+        # 1. Direkt-Lookup im Clients-Dict über Adresse/Name
         target_client = None
         if isinstance(ecu, int) and ecu in self.clients:
             target_client = self.clients[ecu]["client"]
@@ -332,14 +334,37 @@ class Open3E(SmartPlugin):
             self.logger.error(f"on_item_change: Kein aktiver Client fuer Geraet '{ecu}' gefunden.")
             return
 
+        # 2. Schreiben & asynchrones Nachlesen
         try:
-            target_client.write_did(write_did, new_val)
+            target_client.write_did(did=write_did, value=new_val, sub=sub_path)
             self.logger.info(f"on_item_change: DID {write_did} erfolgreich geschrieben.")
-            if read_after_write:
-                self.logger.info(f"on_item_change: Lese DID {write_did} nach dem Schreiben erneut ein.")
-                target_client.read_dids([write_did])
+
+            if read_after_write > 0:
+                self.logger.info(f"on_item_change: Lese DID {write_did} nach dem Schreiben erneut ein in {read_after_write}s via Scheduler).")
+                job_name = f"{self.get_fullname()}: read_after_write_{ecu}_{write_did}_{time.time()}"
+                
+                # Exakte Ausführungszeit als datetime berechnen
+                next_time = self.shtime.now() + datetime.timedelta(seconds=read_after_write)
+
+                self.scheduler_add(
+                    name=job_name,
+                    obj=self._delayed_read_callback,
+                    value={'client': target_client, 'did': write_did},
+                    next=next_time
+                )
+
         except Exception as exc:
             self.logger.error(f"on_item_change: Fehler beim Schreiben von DID {write_did}: {exc}")
+
+    def _delayed_read_callback(self, client, did: int) -> bool:
+        """Callback für den Scheduler zum verzögerten Nachlesen einer DID."""
+        try:
+            self.logger.info(f"Führe verzögertes Nachlesen für DID {did} aus...")
+            client.read_dids([did])
+        except Exception as exc:
+            self.logger.error(f"Fehler beim verzögerten Nachlesen von DID {did}: {exc}")
+        
+        return False
 
     def poll_data(self) -> None:
         """Zyklische Task zur Abfrage fälliger DIDs von den CAN-Geräten.
@@ -777,6 +802,49 @@ class Open3E(SmartPlugin):
                     client.read_all_dids()
                 except Exception as e:
                     self.logger.error(f"Fehler beim Pollen von ECU {ecu_data}: {e}")
+
+    def _get_scanner() -> Optional[Open3EScanner]:
+        """Hilfsmethode zur Wiederverwendung / Lazy-Instanziierung des Scanners."""
+        if getattr(self, "scanner", None) is None:
+            try:
+                self.scanner = Open3EScanner(bus=self.canport, logger=self.logger)
+            except Exception as ex:
+                self.logger.error(f"Failed to initialize Open3EScanner: {ex}", exc_info=True)
+                return None
+        return self.scanner
+
+    def scan_ecus(self, start_cob: int = 0x680, last_cob: int = 0x6EF) -> List[int]:
+        """Scannt nach allen aktiven ECUs auf dem Bus."""
+        scanner = self._get_scanner()
+        if not scanner:
+            return []
+
+        try:
+            # Nutzt den übergebenen Adressbereich
+            self.ecus = scanner.find_ecus(start_cob=start_cob, last_cob=last_cob)
+            return self.ecus
+        except Exception as ex:
+            self.logger.error(f"Error during ECU scan: {ex}", exc_info=True)
+            return []
+
+    def scan_did_on_ecu(
+        self, 
+        ecu: int = 0x680, 
+        start_did: int = 256, 
+        last_did: int = 4000
+    ) -> Dict[int, Any]:
+        """Fragt alle unterstützten DIDs für eine spezifische ECU ab."""
+        scanner = self._get_scanner()
+        if not scanner:
+            return {}
+
+        try:
+            results = scanner.scan_dids_for_ecu(cob_id=ecu, start_did=start_did, last_did=last_did)
+            self.ecu_dids[ecu] = results
+            return results
+        except Exception as ex:
+            self.logger.error(f"Error scanning DIDs for ECU {hex(ecu)}: {ex}", exc_info=True)
+            return {}
 
 
 if __name__ == '__main__':

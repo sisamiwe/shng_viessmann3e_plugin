@@ -12,7 +12,7 @@ plugin:
     tester:
     keywords: viessmann  open3e
     state: ready                    # change to ready when done with development
-    version: 0.0.1                  # Plugin version
+    version: 0.0.2                  # Plugin version
     sh_minversion: 1.12.0            # minimum shNG version to use this plugin
     py_minversion: 3.12
     multi_instance: false           # plugin supports multi instance
@@ -62,7 +62,7 @@ item_attributes:
             de: 'Änderung des Items wird mit konfiguriertem DID an die Heizung geschickt'
             en: 'Changes to this item result in sending the configured DID to the heating system'
 
-    open3e_read_afterwrite:
+    open3e_read_after_write:
         type: int
         description:
             de: 'Konfiguriert eine Verzögerung in Sekunden nachdem ein Lesekommando nach einem Schreibkommando an die Heizung geschickt wird'
@@ -87,11 +87,193 @@ item_attributes:
             de: 'Liest alle konfigurierten Items neu, wenn es auf True gesetzt wird'
             en: 'Triggers reading of all configured items if set to True'
 
+item_structs:
+    heizkreis:
+        vorlauftemperatur_ist:
+            name_: "{..:_hk} Vorlauftemperatur Ist"
+            type: num
+            open3e_ecu: "..:_ecu"
+            open3e_did_: "{..:_did_vl_ist}.Actual"
+            open3e_read_cycle: 60
+            visu_acl: ro
 
-item_structs: NONE
+        vorlauftemperatur_soll:
+            name_: "{..:_hk} Vorlauftemperatur Soll"
+            type: num
+            open3e_ecu: "..:_ecu"
+            open3e_did: "..:_did_vl_soll"
+            open3e_read_cycle: 300
+            visu_acl: ro
+
+        ruecklauftemperatur:
+            name_: "{..:_hk} Rücklauftemperatur Ist"
+            type: num
+            open3e_ecu: "..:_ecu"
+            open3e_did_: "{..:_did_rl}.Actual"
+            open3e_read_cycle: 60
+            visu_acl: ro
+
+        raumtemperatur_soll:
+            name_:  "{..:_hk} Raumtemperatur Soll (Standard)"
+            type: num
+            open3e_ecu: "..:_ecu"
+            open3e_did_: "{..:_did_raumtemp_soll}.Standard"
+            open3e_read_cycle: 300
+            visu_acl: rw
+
+        heizkreispumpe_status:
+            name_: "{..:_hk} Heizkreispumpe"
+            type: bool
+            open3e_ecu: "..:_ecu"
+            open3e_did_: "{..:_did_pumpe}.ActualValue"
+            open3e_read_cycle: 20
+            visu_acl: ro
+
+        mischer_position_soll:
+            name_: "{..:_hk} MixerOneCircuitThreeWayValvePositionPercent"
+            type: num
+            open3e_ecu: "..:_ecu"
+            open3e_did_: "{..:_did_mischer}.Setpoint"
+            open3e_read_cycle: 20
+            open3e_read_at_init: true   
+            visu_acl: ro
+
+        mischer_position_ist:
+            name_: "{..:_hk} MixerOneCircuitThreeWayValvePositionPercent"
+            type: num
+            open3e_ecu: "..:_ecu"
+            open3e_did_: "{..:_did_mischer}.Actual"
+            open3e_read_cycle: 20
+            open3e_read_at_init: true   
+            visu_acl: ro
+
+    heizkreis_1:
+        vorlauftemperatur_ist:
+            name: HK1 Vorlauftemperatur Ist
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '284.Actual'
+            open3e_read_cycle: 60
+            visu_acl: ro
+
+        vorlauftemperatur_soll:
+            name: HK1 Vorlauftemperatur Soll
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '987'
+            open3e_read_cycle: 300
+            visu_acl: ro
+
+        ruecklauftemperatur:
+            name: HK1 Rücklauftemperatur Ist
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '285.Actual'
+            open3e_read_cycle: 60
+            visu_acl: ro
+
+        raumtemperatur_soll:
+            name: HK1 Raumtemperatur Soll (Standard)
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '424.Standard'
+            open3e_read_cycle: 300
+            visu_acl: rw
+
+        heizkreispumpe_status:
+            name: HK1 Heizkreispumpe
+            type: bool
+            open3e_ecu: ..:.
+            open3e_did: '401.ActualValue'
+            open3e_read_cycle: 60
+            visu_acl: ro
+
+    heizkreis_2:
+        vorlauftemperatur_ist:
+            name: HK2 Vorlauftemperatur Ist
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '286.Actual'
+            open3e_read_cycle: 60
+            visu_acl: ro
+
+        vorlauftemperatur_soll:
+            name: HK2 Vorlauftemperatur Soll
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '988'
+            open3e_read_cycle: 300
+            visu_acl: ro
+
+        ruecklauftemperatur:
+            name: HK2 Rücklauftemperatur Ist
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '287.Actual'
+            open3e_read_cycle: 60
+            visu_acl: ro
+
+        raumtemperatur_soll:
+            name: HK2 Raumtemperatur Soll (Standard)
+            type: num
+            open3e_ecu: ..:.
+            open3e_did: '426.Standard'
+            open3e_read_cycle: 300
+            visu_acl: rw
+
+        heizkreispumpe_status:
+            name: HK2 Heizkreispumpe
+            type: bool
+            open3e_ecu: ..:.
+            open3e_did: '402.ActualValue'
+            open3e_read_cycle: 60
+            visu_acl: ro
 
 
 logic_parameters: NONE
 
 
-plugin_functions: NONE
+plugin_functions:
+    scan_ecus:
+        type: list
+        description:
+            de: 'Scannt das Systeme und gibt die Liste der gefundenen ECUs zurück'
+            en: 'scan system and returns list of found ecus'
+        parameters:
+            start_cob:
+                type: int
+                default: 0x680
+                description:
+                    de: ''
+                    en: ''
+            last_cob: 
+                type: int
+                default: 0x6EF
+                description:
+                    de: ''
+                    en: ''
+
+    scan_did_on_ecu:
+        type: dict
+        description:
+            de: 'Scannt die ECU und gibt ein dict der gefundenen DIDs zurück'
+            en: 'scan ECU and returns dict of found DIDs'
+        parameters:
+            ecu:
+                type: int
+                default: 0x680
+                description:
+                    de: 'ECU Adresse, die nach DIDs gescannt werden soll'
+                    en: ''
+            start_did:
+                type: int
+                default: 256
+                description:
+                    de: ''
+                    en: ''
+            last_did: 
+                type: int
+                default: 4000
+                description:
+                    de: ''
+                    en: ''
