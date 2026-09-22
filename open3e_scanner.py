@@ -19,95 +19,129 @@ except Exception:
 START_COB: int = 0x680
 LAST_COB: int = 0x6EF
 START_DID: int = 256
-LAST_DID: int = 266  # 4000
+LAST_DID: int = 4000
+
+
+def _is_error(result: Any) -> bool:
+    """Prueft, ob ein O3Eclass-Ergebnis einen Fehler signalisiert.
+
+    Args:
+        result: Rohergebnis von O3Eclass.readByDid().
+
+    Returns:
+        True, wenn das Ergebnis einen 'ERR/'-Fehler enthaelt.
+    """
+    return (isinstance(result, tuple) and len(result) == 3
+            and isinstance(result[1], str) and result[1].startswith("ERR/"))
 
 class Open3EScanner:
     """Spezialisierte Klasse zum Abscannen des CAN-Busses nach verfügbaren ECUs und DIDs."""
 
     def __init__(self, bus: str = "can0", logger: Optional[logging.Logger] = None) -> None:
+        """Initialisiert den Open3E-Scanner.
+
+        Args:
+            bus: CAN-Schnittstellenname (z.B. 'can0').
+            logger: Logger-Instanz. Wird bei None automatisch erstellt.
+        """
         self.bus_name: str = bus
         self.logger: logging.Logger = logger or logging.getLogger("open3e_scanner")
-        self.logger.info("[Open3EScanner]")
+        self.logger.debug("Open3EScanner initialisiert")
 
     def scan_ecus(self, start_cob: int = START_COB, last_cob: int = LAST_COB, test_did: int = START_DID) -> List[int]:
+        """Scannt den COB-ID-Bereich ab und liefert eine Liste aller antwortenden ECUs.
+
+        Args:
+            start_cob: Start-COB-ID fuer den Scan.
+            last_cob: End-COB-ID fuer den Scan.
+            test_did: Test-DID zur Erkennung aktiver ECUs.
+
+        Returns:
+            Liste der gefundenen ECU-Adressen (COB-IDs).
+
+        Raises:
+            RuntimeError: Wenn die open3e-Bibliothek nicht verfuegbar ist.
         """
-        Scannt den COB-ID-Bereich ab und liefert eine Liste aller antwortenden ECUs zurück.
-        """
+        if not HAS_OPEN3E:
+            raise RuntimeError("open3e-Bibliothek nicht verfuegbar.")
 
         found_ecus: List[int] = []
         self.logger.info(
-            f"[Open3EScanner] Starte ECU-Scan auf Bus '{self.bus_name}' "
-            f"({hex(start_cob)} - {hex(last_cob)})..."
+            f"Starte ECU-Scan auf Bus '{self.bus_name}' "
+            f"({hex(start_cob)} - {hex(last_cob)})"
         )
 
         for cob_id in range(start_cob, last_cob + 1):
             response_id = cob_id + 0x10
-            temp_o3e: Optional[O3Eclass] = None
+            o3e: Optional[O3Eclass] = None
 
             try:
-                temp_o3e = O3Eclass(can=self.bus_name, ecutx=cob_id, ecurx=response_id)
-                val = temp_o3e.readByDid(test_did, raw=False)
+                o3e = O3Eclass(can=self.bus_name, ecutx=cob_id, ecurx=response_id)
+                result = o3e.readByDid(test_did, raw=False)
 
-                if val is not None:
-                    # UDS-Fehler abfangen
-                    if isinstance(val, tuple) and len(val) == 3 and isinstance(val[1], str) and val[1].startswith("ERR/"):
-                        continue
+                if _is_error(result):
+                    continue
 
-                    self.logger.info(f"[Open3EScanner] ECU gefunden bei COB-ID: {hex(cob_id)}")
-                    found_ecus.append(cob_id)
+                self.logger.info(f"ECU gefunden bei COB-ID: {hex(cob_id)}")
+                found_ecus.append(cob_id)
 
             except Exception as exc:
-                self.logger.debug(f"[Open3EScanner] Keine Antwort von {hex(cob_id)}: {exc}")
+                self.logger.debug(f"Keine Antwort von {hex(cob_id)}: {exc}")
             finally:
-                if temp_o3e and hasattr(temp_o3e, "close"):
+                if o3e is not None:
                     try:
-                        temp_o3e.close()
+                        o3e.close()
                     except Exception:
                         pass
 
-        self.logger.info(f"[Open3EScanner] Scan beendet. {len(found_ecus)} ECU(s) gefunden: {found_ecus}")
+        self.logger.info(f"Scan beendet. {len(found_ecus)} ECU(s) gefunden: {found_ecus}")
         return found_ecus
 
-    def scan_dids_of_ecu(self, cob_id: int, start_did: int = START_DID, last_did: int = LAST_DID) -> Dict[int, Any]:
+    def scan_ecu_dids(self, cob_id: int, start_did: int = START_DID, last_did: int = LAST_DID) -> Dict[int, Any]:
+        """Fragt fuer eine konkrete ECU alle DIDs im angegebenen Bereich ab.
+
+        Args:
+            cob_id: Die COB-ID der ECU.
+            start_did: Start-DID fuer den Scan.
+            last_did: End-DID fuer den Scan.
+
+        Returns:
+            Dictionary mit DID-IDs als Schluessel und gelesenen Werten.
+
+        Raises:
+            RuntimeError: Wenn die open3e-Bibliothek nicht verfuegbar ist.
         """
-        Fragt für eine konkrete ECU alle DIDs im angegebenen Bereich ab.
-        """
+        if not HAS_OPEN3E:
+            raise RuntimeError("open3e-Bibliothek nicht verfuegbar.")
 
         ecu_results: Dict[int, Any] = {}
-
         self.logger.info(
-            f"[Open3EScanner] Starte DID-Scan ({start_did}-{last_did}) "
-            f"für ECU {hex(cob_id)}..."
+            f"Starte DID-Scan ({start_did}-{last_did}) "
+            f"für ECU {hex(cob_id)}"
         )
 
-        temp_o3e: Optional[O3Eclass] = None
+        o3e: Optional[O3Eclass] = None
         try:
-            temp_o3e = O3Eclass(can=self.bus_name, ecutx=cob_id)
+            o3e = O3Eclass(can=self.bus_name, ecutx=cob_id)
 
             for did in range(start_did, last_did + 1):
                 try:
-                    result = temp_o3e.readByDid(did, raw=False)
-
-                    if isinstance(result, tuple) and len(result) == 3:
-                        val, idstr, _ = result
-                        if isinstance(idstr, str) and idstr.startswith("ERR/"):
-                            continue
-                        ecu_results[did] = val
-                    elif result is not None:
-                        ecu_results[did] = result
-
+                    result = o3e.readByDid(did, raw=False)
+                    if _is_error(result):
+                        continue
+                    ecu_results[did] = result[0]
                 except Exception:
                     pass
 
         except Exception as exc:
-            self.logger.error(f"[Open3EScanner] Fehler beim Scan für ECU {hex(cob_id)}: {exc}")
+            self.logger.error(f"Fehler beim Scan für ECU {hex(cob_id)}: {exc}")
         finally:
-            if temp_o3e and hasattr(temp_o3e, "close"):
+            if o3e is not None:
                 try:
-                    temp_o3e.close()
+                    o3e.close()
                 except Exception:
                     pass
 
-        self.logger.info(f"[Open3EScanner] Scan für {hex(cob_id)} beendet. {len(ecu_results)} DIDs gefunden: {ecu_results}")
+        self.logger.info(f"Scan für {hex(cob_id)} beendet. {len(ecu_results)} DIDs gefunden")
         return ecu_results
     

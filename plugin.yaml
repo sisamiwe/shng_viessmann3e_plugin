@@ -12,7 +12,7 @@ plugin:
     tester:
     keywords: viessmann  open3e
     state: ready                    # change to ready when done with development
-    version: 0.0.2                  # Plugin version
+    version: 0.0.3                  # Plugin version
     sh_minversion: 1.12.0            # minimum shNG version to use this plugin
     py_minversion: 3.12
     multi_instance: false           # plugin supports multi instance
@@ -35,6 +35,7 @@ parameters:
         description:
             de: 'CAN-Bus-Port, mit dem das Gerät verbunden ist'
             en: 'CAN bus port the device is connected to'
+    
     read_cycle:
         type: num
         default: 60
@@ -119,6 +120,7 @@ item_structs:
             open3e_ecu: "..:_ecu"
             open3e_did_: "{..:_did_raumtemp_soll}.Standard"
             open3e_read_cycle: 300
+            open3e_read_init: true
             visu_acl: rw
 
         heizkreispumpe_status:
