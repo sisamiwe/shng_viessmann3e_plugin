@@ -108,6 +108,8 @@ class Open3E(SmartPlugin):
             self.canport = self.get_parameter_value('can_port')
             self.default_read_cycle = self.get_parameter_value('read_cycle')
             self._pause_item_path = self.get_parameter_value('pause_item')
+            self.read_all_at_init = bool(self.get_parameter_value('read_all_at_init'))
+            self.logger.warning(f"{self.read_all_at_init=}")
             self.init_webinterface(WebInterface)
 
         # Dependency & configuration validation
@@ -127,8 +129,6 @@ class Open3E(SmartPlugin):
         self._update_active: bool = False
         self._intial_item_read_done: bool = False
         
-
-        # TODO: Check items, if configured DIDs are supported. self.devices enthält die supporteten DIDs
 
     # =========================================================================
     # 1. PLUGIN LIFECYCLE
@@ -177,7 +177,7 @@ class Open3E(SmartPlugin):
     def parse_item(self, item) -> Optional[Callable]:
         """Analysiert Item-Attribute beim Start von SmartHomeNG.
 
-        Liest die Item-Attribute `open3e_read_cycle`, `open3e_read_init`,
+        Liest die Item-Attribute `open3e_read_cycle`, `open3e_read_at_init`,
         `open3e_write`, `open3e_read_afterwrite`, `open3e_ecu` etc. aus
         und registriert das Item (unterstützt kombiniertes Lesen und Schreiben).
 
@@ -203,13 +203,13 @@ class Open3E(SmartPlugin):
             return self.update_item
         
         # 2. Attribute auslesen
-        open3e_read_init = bool(self.get_iattr_value(item.conf, 'open3e_read_init'))
+        open3e_read_at_init = self.read_all_at_init or bool(self.get_iattr_value(item.conf, 'open3e_read_at_init'))
         open3e_read_cycle = int(self.get_iattr_value(item.conf, 'open3e_read_cycle') or 0)
         open3e_write = bool(self.get_iattr_value(item.conf, 'open3e_write'))
         open3e_read_after_write = int(self.get_iattr_value(item.conf, 'open3e_read_after_write') or 0)
 
         # Abbruch, wenn weder Lese- noch Schreibregel aktiv sind
-        if not (open3e_read_init or open3e_read_cycle > 0 or open3e_write):
+        if not (open3e_read_at_init or open3e_read_cycle > 0 or open3e_write):
             return None
 
         # 3. ECU & DID verarbeiten
@@ -252,8 +252,8 @@ class Open3E(SmartPlugin):
             return None
 
         # 4. Kombinierte Konfiguration erstellen
-        is_read_active = open3e_read_init or open3e_read_cycle > 0
-        nexttime = 0.0 if open3e_read_init else (time.time() + open3e_read_cycle if open3e_read_cycle > 0 else 0.0)
+        is_read_active = open3e_read_at_init or open3e_read_cycle > 0
+        nexttime = 0.0 if open3e_read_at_init else (time.time() + open3e_read_cycle if open3e_read_cycle > 0 else 0.0)
 
         item_config = {
             'ecu': ecu,
@@ -261,7 +261,7 @@ class Open3E(SmartPlugin):
             'sub_path': sub_path,
             'read': is_read_active,
             'read_cycle': open3e_read_cycle,
-            'read_init': open3e_read_init,
+            'read_init': open3e_read_at_init,
             'nexttime': nexttime,
             'write': open3e_write,
             'read_after_write': open3e_read_after_write

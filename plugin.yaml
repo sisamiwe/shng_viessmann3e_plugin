@@ -43,6 +43,13 @@ parameters:
             de: 'Standard-Intervall in Sekunden für das Lesekommando'
             en: 'Default interval in seconds for the read command'
 
+    read_all_at_init:
+        type: bool
+        default: true
+        description:
+            de: 'Sollen alle Werte bei Start gelesen werden'
+            en: 'Should all value be read at init'
+
 item_attributes:
     # Definition of item attributes defined by this plugin
     open3e_ecu:
@@ -75,7 +82,7 @@ item_attributes:
             de: 'Liest Wert mit konfiguriertem DID im Intervall aus.'
             en: 'The item value should be read by using the configured DID'
 
-    open3e_read_init:
+    open3e_read_at_init:
         type: bool
         default: False
         description:
@@ -120,7 +127,7 @@ item_structs:
             open3e_ecu: "..:_ecu"
             open3e_did_: "{..:_did_raumtemp_soll}.Standard"
             open3e_read_cycle: 300
-            open3e_read_init: true
+            open3e_read_at_init: true
             visu_acl: rw
 
         heizkreispumpe_status:
