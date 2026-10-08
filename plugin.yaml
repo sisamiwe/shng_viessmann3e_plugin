@@ -244,19 +244,19 @@ item_structs:
         #
         #   status:
         #       _ecu: '....:_ecu1'
-        #       _name: Status
+        #       _msg_type: Status
         #   _did: 257
         #   struct: my.vitocal_250a.dtc_list
         # =============================================================================
-        name: 'Anzahl der {_name}meldungen'
+        name: 'Anzahl der {_msg_type}meldungen'
         type: num
 
         meldungen:
-            name: 'Liste der {_name}meldungen'
+            name: 'Liste der {_msg_type}meldungen'
             type: list
 
         raw:
-            name: 'Rohdaten der {_name}meldungen'
+            name: 'Rohdaten der {_msg_type}meldungen'
             type: dict
             open3e_ecu: '..:_ecu'
             open3e_did: '..:_did'
@@ -264,34 +264,6 @@ item_structs:
             on_update:
             - '.. = value["Count"]'
             - '..meldungen = value["ListEntries"]'
-
-    state_with_raw:
-        # =============================================================================
-        # Zweck:
-        #   Definition eines Statuswerts einschließlich:
-        #   - numerischer Status-ID
-        #   - vollständigem Open3E-Rohwert
-        #
-        # Beispiel:
-        #   status:
-        #       _ecu: '..:_ecu1'
-        #       _name: Warmwasser
-        #       _did: 1659.State
-        #       struct: my.vitocal_250a.state_with_raw
-        #
-        # =============================================================================
-        name: '{_name} Status ID'
-        type: num
-        open3e_ecu: '..:_ecu'
-        open3e_did_: '..:_did.ID'
-        open3e_read_cycle: 60
-
-        raw:
-            name: '{_name} Status'
-            type: dict
-            open3e_ecu: '..:_ecu'
-            open3e_did: '..:_did'
-            open3e_read_cycle: 60
 
     energy_matrix:
         # =============================================================================
@@ -305,7 +277,7 @@ item_structs:
         # In der Anwendung zu setzen:
         #   _ecu
         #       Relative Referenz auf die ECU.
-        #   _name
+        #   _nrg_name
         #       Spezifischer Namensteil der Energiematrix,
         #       z. B. Heizenergie, WW-Energie oder Kühlenergie.
         #   _did_month
@@ -316,35 +288,35 @@ item_structs:
         # Beispiel:
         #   verbrauch_heizen:
         #       _ecu: '...:_ecu1'
-        #       _name: Heizenergie
+        #       _nrg_name: Heizenergie
         #       _did_month: 1294
         #       _did_year: 1316
         #       struct: my.vitocal_250a.energy_matrix
         #
         # =============================================================================
         aktueller_monat:
-            name: '{_name} aktueller Monat'
+            name: '{_nrg_name} aktueller Monat'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did_month}.CurrentMonth'
             open3e_read_cycle: 86400
 
         letzter_monat:
-            name: '{_name} letzter Monat'
+            name: '{_nrg_name} letzter Monat'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did_month}.LastMonth'
             open3e_read_cycle: 86400
 
         aktuelles_jahr:
-            name: '{_name} aktuelles Jahr'
+            name: '{_nrg_name} aktuelles Jahr'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did_year}.CurrentYear'
             open3e_read_cycle: 86400
 
         letztes_jahr:
-            name: '{_name} letztes Jahr'
+            name: '{_nrg_name} letztes Jahr'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did: '..:{_did_year}.LastYear'
@@ -365,7 +337,7 @@ item_structs:
         # In der Anwendung zu setzen:
         #   _ecu
         #       Relative Referenz auf die ECU.
-        #   _name
+        #   _counter_name
         #       Spezifischer Namensteil des Energiezählers,
         #       z. B. Stromzähler oder Energiezähler.
         #   _did
@@ -374,47 +346,47 @@ item_structs:
         # Beispiel:
         #   stromzaehler:
         #       _ecu: '...:_ecu1'
-        #       _name: Stromzähler
+        #       _counter_name: Stromzähler
         #       _did: 3228
         #       struct: my.vitocal_250a.energy_meter_three_phase
         # =============================================================================
         leistung_l1:
-            name: '{_name} Leistung L1'
+            name: '{_counter_name} Leistung L1'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did}.PowerL1'
             open3e_read_cycle: 30
 
         leistung_l2:
-            name: '{_name} Leistung L2'
+            name: '{_counter_name} Leistung L2'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did}.PowerL2'
             open3e_read_cycle: 30
 
         leistung_l3:
-            name: '{_name} Leistung L3'
+            name: '{_counter_name} Leistung L3'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did}.PowerL3'
             open3e_read_cycle: 30
 
         spannung_l1:
-            name: '{_name} Spannung L1'
+            name: '{_counter_name} Spannung L1'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did}.VoltageL1'
             open3e_read_cycle: 60
 
         spannung_l2:
-            name: '{_name} Spannung L2'
+            name: '{_counter_name} Spannung L2'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did}.VoltageL2'
             open3e_read_cycle: 60
 
         spannung_l3:
-            name: '{_name} Spannung L3'
+            name: '{_counter_name} Spannung L3'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '..:{_did}.VoltageL3'
@@ -444,7 +416,7 @@ item_structs:
         # Beispiel:
         #   heizkreis1:
         #       _ecu: '..:_ecu1'
-        #       _name: HK1
+        #       _circuit: HK1
         #       _did_name: 627
         #       _did_flow_actual: 284
         #       _did_flow_target: 987
@@ -469,10 +441,10 @@ item_structs:
             open3e_read_cycle: 86400
 
         vorlauf_ist:
-            name_: '{..:_name} Vorlauftemperatur Ist'
+            name_: '{..:_circuit} Vorlauftemperatur Ist'
             type: num
 
-            _name_: '{..:_name} Vorlauftemperatur Ist'
+            _name_: '{..:_circuit} Vorlauftemperatur Ist'
             _did_desc: MixerOneCircuitFlowTemperatureSensor
             _ecu: ..:_ecu
             _did: ..:_did_flow_actual
@@ -481,7 +453,7 @@ item_structs:
             struct: .sensor_short
 
         vorlauf_soll:
-            name_: '{..:_name} Vorlauftemperatur Soll'
+            name_: '{..:_circuit} Vorlauftemperatur Soll'
             type: num
             open3e_write: true
             open3e_ecu: '..:_ecu'
@@ -489,14 +461,14 @@ item_structs:
             open3e_read_cycle: 60
 
         vorlauf_min_max:
-            name: '{..:_name} Vorlauftemperatur Grenzen'
+            name: '{..:_circuit} Vorlauftemperatur Grenzen'
             type: dict
             open3e_ecu: '..:_ecu'
             open3e_did: '..:_did_flow_minmax'
             open3e_read_cycle: 3600
 
         vorlauf_soll_extern:
-            name_: '{..:_name} Vorlauf Sollwert extern'
+            name_: '{..:_circuit} Vorlauf Sollwert extern'
             type: num
             open3e_write: true
             open3e_ecu: '..:_ecu'
@@ -504,12 +476,11 @@ item_structs:
             open3e_read_cycle: 60
             _did_desc: ExternalMixerOneCircuitFixedValueTargetTemperatureSetpoint
 
-        # TODO: Nicht montiert
         ruecklauf_ist:
-            name_: '{..:_name} Rücklauftemperatur Ist'
+            name_: '{..:_circuit} Rücklauftemperatur Ist'
             type: num
 
-            _name_: '{..:_name} Rücklauftemperatur Ist'
+            _name_: '{..:_circuit} Rücklauftemperatur Ist'
             _did_desc: MixerOneCircuitReturnTemperatureSensor
             _ecu: ..:_ecu
             _did: ..:_did_return_actual
@@ -517,12 +488,11 @@ item_structs:
 
             struct: .sensor_short
 
-        # TODO: Nicht montiert
         raumtemperatur_ist:
-            name_: '{..:_name} Raumtemperatur Ist'
+            name_: '{..:_circuit} Raumtemperatur Ist'
             type: num
 
-            _name_: '{..:_name} Raumtemperatur Ist'
+            _name_: '{..:_circuit} Raumtemperatur Ist'
             _did_desc: MixerOneCircuitRoomTemperatureSensor
             _ecu: ..:_ecu
             _did: ..:_did_room_actual
@@ -534,28 +504,28 @@ item_structs:
             _read_cycle: 300
 
             komfort:
-                name_: '{...:_name} Komforttemperatur'
+                name_: '{...:_circuit} Komforttemperatur'
                 type: num
                 open3e_ecu: '...:_ecu'
                 open3e_did_: '{...:_did_room_setpoints}.Comfort'
                 open3e_read_cycle: ..:_read_cycle
 
             standard:
-                name_: '{...:_name} Standardtemperatur'
+                name_: '{...:_circuit} Standardtemperatur'
                 type: num
                 open3e_ecu: '...:_ecu'
                 open3e_did_: '{...:_did_room_setpoints}.Standard'
                 open3e_read_cycle: ..:_read_cycle
 
             reduziert:
-                name_: '{...:_name} reduzierte Temperatur'
+                name_: '{...:_circuit} reduzierte Temperatur'
                 type: num
                 open3e_ecu: '...:_ecu'
                 open3e_did_: '{...:_did_room_setpoints}.Reduced'
                 open3e_read_cycle: ..:_read_cycle
 
             raw:
-                name_: '{...:_name} Raumtemperatur-Sollwerte'
+                name_: '{...:_circuit} Raumtemperatur-Sollwerte'
                 type: dict
                 open3e_ecu: '...:_ecu'
                 open3e_did: ...:_did_room_setpoints
@@ -564,7 +534,7 @@ item_structs:
         
         # TODO: nicht decodiert 'ff00000004'
         luftfeuchtigkeit:
-            name: '{_name} relative Luftfeuchtigkeit'
+            name: '{_circuit} relative Luftfeuchtigkeit'
             type: str
             open3e_ecu: '..:_ecu'
             open3e_did: '..:_did_humidity'
@@ -573,15 +543,15 @@ item_structs:
 
         betriebsmodus:
             soll:
-                name_: '{...:_name} Betriebsmodus Soll'
+                name_: '{...:_circuit} Betriebsmodus Soll'
                 type: str
 
             ist:
-                name_: '{...:_name} Betriebsmodus Ist'
+                name_: '{...:_circuit} Betriebsmodus Ist'
                 type: str
 
             raw:
-                name: '{...:_name} Betriebsmodus'
+                name: '{...:_circuit} Betriebsmodus'
                 type: dict
                 open3e_write: true
                 open3e_ecu: '...:_ecu'
@@ -598,15 +568,15 @@ item_structs:
 
         betriebsprogramm:
             soll:
-                name: '{...:_name} Betriebsprogramm Soll'
+                name: '{...:_circuit} Betriebsprogramm Soll'
                 type: str
 
             ist:
-                name: '{...:_name} Betriebsprogramm Ist'
+                name: '{...:_circuit} Betriebsprogramm Ist'
                 type: str
 
             raw:
-                name_: '{...:_name} Betriebsprogramm'
+                name_: '{...:_circuit} Betriebsprogramm'
                 type: dict
                 open3e_ecu: '...:_ecu'
                 open3e_did_: '{...:_did_operation_state}'
@@ -619,7 +589,7 @@ item_structs:
 
         urlaub:
             urlaubsphase:
-                name: '{...:_name} Urlaubsphase'
+                name: '{...:_circuit} Urlaubsphase'
                 description: HolidayPhase
                 type: dict
                 open3e_did: '...:_did_holiday'
@@ -627,7 +597,7 @@ item_structs:
                 open3e_read_cycle: 3600
 
             urlaubsphase_zuhause:
-                name: '{...:_name} Urlaub-Zuhause Phase'
+                name: '{...:_circuit} Urlaub-Zuhause Phase'
                 description: HolidayAtHomePhase
                 type: dict
                 open3e_did: '...:_did_holiday_at_home'
@@ -637,26 +607,26 @@ item_structs:
         pumpe:
             _ecu: '..:_ecu'
             _did: '..:_did_pump'
-            _name: '..:_name'
+            _circuit: '..:_circuit'
             _read_cycle: 30
             struct: .pumpe
 
         mischer:
             _ecu: '..:_ecu'
             _did: '..:_did_mixer'
-            _name: '..:_name'
+            _circuit: '..:_circuit'
             _read_cycle: 30
             struct: .mischer
 
         heizkurve:
             _ecu: '..:_ecu'
             _did: '..:_did_heating_curve'
-            _name: '..:_name'
+            _circuit: '..:_circuit'
             _read_cycle: 3600
             struct: .heizkurve
 
         sommersparschwelle:
-            name: '{_name} Sommersparschwelle'
+            name: '{_circuit} Sommersparschwelle'
             type: num
             open3e_ecu: '..:_ecu'
             open3e_did_: '{..:_did_summer_saving}.Temperature'
