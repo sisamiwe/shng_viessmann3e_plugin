@@ -18,14 +18,16 @@ except Exception:
     HAS_OPEN3E = False
 
 CallbackType = Callable[[int, str, Any], None]
+"""Signatur: ``callback(did_id: int, did_name: str, value: Any) -> None``."""
 
-READ_FAULTS_BEFORE_BLACKLISTED: int = 3
 
 class Open3EClient:
     """Kompakter Wrapper um :class:`open3e.Open3Eclass.O3Eclass`."""
 
+    CLIENT_VERSION = '0.0.1'
+
     # =========================================================================
-    # 1. LEBENSZYKLUS & VERBINDUNG (Lifecycle & Connection)
+    # LEBENSZYKLUS & VERBINDUNG (Lifecycle & Connection)
     # =========================================================================
 
     def __init__(
@@ -94,10 +96,12 @@ class Open3EClient:
 
         self.o3e = None
         self._name_to_did_map.clear()
+        if hasattr(self, '_cached_data_identifiers'):
+            del self._cached_data_identifiers
         self.logger.info("Verbindung getrennt.")
 
     # =========================================================================
-    # 2. CALLBACK-VERWALTUNG & EVENT-DISPATCHING
+    # CALLBACK-VERWALTUNG & EVENT-DISPATCHING
     # =========================================================================
 
     def add_callback(self, callback_func: CallbackType) -> None:
@@ -164,7 +168,7 @@ class Open3EClient:
         return None
 
     # =========================================================================
-    # 3. DATEN ZUGRIFF PER ID (Read & Write by DID-ID)
+    # DATEN ZUGRIFF PER ID (Read & Write by DID-ID)
     # =========================================================================
 
     def read_did(self, did: int) -> Optional[Any]:
@@ -185,7 +189,6 @@ class Open3EClient:
             return self._process_read_result(result)
         except Exception as exc:
             self.logger.error(f"Fehler beim Lesen von DID {did}: {exc}", exc_info=True)
-            # Fehler bei DID 425: Device rejected this read access. Probably DID 425 is not available. ReadDataByIdentifier service execution returned a negative response RequestOutOfRange (0x31)
             return None
 
     def read_dids(self, dids: List[int]) -> None:
@@ -284,7 +287,7 @@ class Open3EClient:
             return False
 
     # =========================================================================
-    # 4. DATENZUGRIFF PER KLARTEXT-NAME (Name-based Access)
+    # DATENZUGRIFF PER KLARTEXT-NAME (Name-based Access)
     # =========================================================================
 
     def lookup_did(self, name: str) -> Optional[int]:
@@ -296,7 +299,7 @@ class Open3EClient:
         Returns:
             Die DID-Nummer oder None, falls nicht gefunden.
         """
-        return self._name_to_did_map.get(name.lower()) if self.connected else None
+        return self._name_to_did_map.get(name.lower())
 
     def read_by_name(self, name: str) -> Optional[Any]:
         """Liest einen einzelnen Datenpunkt anhand seines Klartext-Namens.
@@ -330,7 +333,7 @@ class Open3EClient:
         return results
 
     # =========================================================================
-    # 5. METADATEN & INSPEKTION (Schema, Codecs & Cache)
+    # METADATEN & INSPEKTION (Schema, Codecs & Cache)
     # =========================================================================
 
     def describe_did(self, did: int) -> Optional[Dict[str, Any]]:
@@ -377,7 +380,11 @@ class Open3EClient:
 
     def _get_data_identifiers(self) -> Optional[Dict[int, Any]]:
         """Gibt das dataIdentifiers-Dict der O3Eclass-Instanz zurueck."""
-        return getattr(self.o3e, "dataIdentifiers", None) if self.o3e else None
+        if self.o3e:
+            if not hasattr(self, '_cached_data_identifiers'):
+                self._cached_data_identifiers = getattr(self.o3e, "dataIdentifiers", None)
+            return self._cached_data_identifiers
+        return None
 
     def _build_name_cache(self) -> None:
         """Baut das Name-to-DID Mapping fur schnellen O(1) Zugriff auf."""
@@ -387,7 +394,7 @@ class Open3EClient:
             return
 
         self._name_to_did_map = {
-            str(codec.id).lower(): did
+            str(getattr(codec, "id", None)).lower(): did
             for did, codec in dids.items()
             if getattr(codec, "id", None)
         }

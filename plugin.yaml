@@ -12,7 +12,7 @@ plugin:
     tester:
     keywords: viessmann  open3e
     state: ready                    # change to ready when done with development
-    version: 0.0.3                  # Plugin version
+    version: 0.0.5                  # Plugin version
     sh_minversion: 1.12.0            # minimum shNG version to use this plugin
     py_minversion: 3.12
     multi_instance: false           # plugin supports multi instance
@@ -50,8 +50,14 @@ parameters:
             de: 'Sollen alle Werte bei Start gelesen werden'
             en: 'Should all value be read at init'
 
+    webif_pagelength:
+        type: int
+        default: 100
+        description:
+            de: 'Anzahl der Eintraege pro Seite im Webinterface'
+            en: 'Number of entries per page in web interface'
+
 item_attributes:
-    # Definition of item attributes defined by this plugin
     open3e_ecu:
         type: str
         description:
@@ -96,147 +102,649 @@ item_attributes:
             en: 'Triggers reading of all configured items if set to True'
 
 item_structs:
+
+    pumpe:
+        # _ecu: '....:_ecu1'
+        # _did: 401
+        # _circuit: HK1
+        # _read_cycle: 30
+        # struct: open3e.pumpe
+
+        power_ist:
+            name_: Pumpe {..:_circuit} Status-Ist
+            type: bool
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.PowerState"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitPump.PowerState
+
+        power_soll:
+            name_: Pumpe {..:_circuit} Status-Soll
+            type: bool
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.TargetPowerState"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitPump.TargetPowerState
+
+        drehzahl_ist:
+            name_: Pumpe {..:_circuit} Drehzahl-Ist
+            type: num
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.ActualValue"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitPump.ActualValue
+
+        drehzahl_soll:
+            name_: Pumpe {..:_circuit} Drehzahl-Soll
+            type: num
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.TargetValue"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitPump.TargetValue
+
+        fehlerstatus:
+            name_: Pumpe {..:_circuit} Fehlerstatus
+            type: bool
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.ErrorState"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitPump.ErrorState
+
+        raw:
+            name_: Pumpe {..:_circuit} Rohwert
+            type: dict
+            open3e_ecu: ..:_ecu
+            open3e_did: ..:_did
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitPump
+
+    mischer:
+        # _ecu: '....:_ecu1'
+        # _did: 475
+        # _circuit: HK2
+        # _read_cycle: 3600
+        # struct: open3e.mischer
+
+        position_ist:
+            name_: Mischerpostion {..:_circuit} Ist
+            type: num
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.Actual"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitThreeWayValvePositionPercent.Actual
+
+        position_soll:
+            name_: Mischerpostion {..:_circuit} Soll
+            type: num
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.ActuatorSetpoint"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitThreeWayValvePositionPercent.Setpoint
+
+        raw:
+            name_: Mischerpostion {..:_circuit} Rohwert
+            type: dict
+            open3e_ecu: ..:_ecu
+            open3e_did: ..:_did
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerOneCircuitThreeWayValvePositionPercent
+
+    heizkurve:
+        # _ecu: '....:_ecu1'
+        # _did: 880
+        # _circuit: HK2
+        # _read_cycle: 3600
+        # struct: open3e.heizkurve
+
+        neigung:
+            name_: Heizkurve {..:_circuit} Neigung
+            type: num
+            open3e_write: true
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.Gradient"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerTwoCircuitCentralHeatingCurve.Gradient
+
+        niveau:
+            name_: Heizkurve {..:_circuit} Niveau
+            type: num
+            open3e_write: true
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.Level"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerTwoCircuitCentralHeatingCurve.Level
+
+        basispunkt:
+            name_: Heizkurve {..:_circuit} Basispunkt
+            type: num
+            open3e_write: true
+            open3e_ecu: ..:_ecu
+            open3e_did_: "{..:_did}.BasePoint"
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerTwoCircuitCentralHeatingCurve.BasePoint
+
+        raw:
+            name_: Heizkurve {..:_circuit} Rohwert
+            type: dict
+            open3e_ecu: ..:_ecu
+            open3e_did: ..:_did
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: MixerTwoCircuitCentralHeatingCurve
+
+    dtc_list:
+        # =============================================================================
+        # Zweck:
+        #   Definition einer Diagnosemeldungsliste einschließlich:
+        #   - Anzahl der Meldungen
+        #   - Liste der Meldungen
+        #   - Open3E-Rohwert
+        #   - Aufteilung des Rohwerts in Anzahl und Meldungsliste
+        #
+        # Beispiel:
+        #
+        #   status:
+        #       _ecu: '....:_ecu1'
+        #       _name: Status
+        #   _did: 257
+        #   struct: my.vitocal_250a.dtc_list
+        # =============================================================================
+        name: 'Anzahl der {_name}meldungen'
+        type: num
+
+        meldungen:
+            name: 'Liste der {_name}meldungen'
+            type: list
+
+        raw:
+            name: 'Rohdaten der {_name}meldungen'
+            type: dict
+            open3e_ecu: '..:_ecu'
+            open3e_did: '..:_did'
+            open3e_read_cycle: 600
+            on_update:
+            - '.. = value["Count"]'
+            - '..meldungen = value["ListEntries"]'
+
+    state_with_raw:
+        # =============================================================================
+        # Zweck:
+        #   Definition eines Statuswerts einschließlich:
+        #   - numerischer Status-ID
+        #   - vollständigem Open3E-Rohwert
+        #
+        # Beispiel:
+        #   status:
+        #       _ecu: '..:_ecu1'
+        #       _name: Warmwasser
+        #       _did: 1659.State
+        #       struct: my.vitocal_250a.state_with_raw
+        #
+        # =============================================================================
+        name: '{_name} Status ID'
+        type: num
+        open3e_ecu: '..:_ecu'
+        open3e_did_: '..:_did.ID'
+        open3e_read_cycle: 60
+
+        raw:
+            name: '{_name} Status'
+            type: dict
+            open3e_ecu: '..:_ecu'
+            open3e_did: '..:_did'
+            open3e_read_cycle: 60
+
+    energy_matrix:
+        # =============================================================================
+        # Zweck:
+        #   Vollständige Definition einer Energieverbrauchsmatrix einschließlich:
+        #   - Verbrauch des aktuellen Monats
+        #   - Verbrauch des letzten Monats
+        #   - Verbrauch des aktuellen Jahres
+        #   - Verbrauch des letzten Jahres
+        #
+        # In der Anwendung zu setzen:
+        #   _ecu
+        #       Relative Referenz auf die ECU.
+        #   _name
+        #       Spezifischer Namensteil der Energiematrix,
+        #       z. B. Heizenergie, WW-Energie oder Kühlenergie.
+        #   _did_month
+        #       Basis-DID der Monatsmatrix.
+        #   _did_year
+        #       Basis-DID der Jahresmatrix.
+        #
+        # Beispiel:
+        #   verbrauch_heizen:
+        #       _ecu: '...:_ecu1'
+        #       _name: Heizenergie
+        #       _did_month: 1294
+        #       _did_year: 1316
+        #       struct: my.vitocal_250a.energy_matrix
+        #
+        # =============================================================================
+        aktueller_monat:
+            name: '{_name} aktueller Monat'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did_month}.CurrentMonth'
+            open3e_read_cycle: 86400
+
+        letzter_monat:
+            name: '{_name} letzter Monat'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did_month}.LastMonth'
+            open3e_read_cycle: 86400
+
+        aktuelles_jahr:
+            name: '{_name} aktuelles Jahr'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did_year}.CurrentYear'
+            open3e_read_cycle: 86400
+
+        letztes_jahr:
+            name: '{_name} letztes Jahr'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did: '..:{_did_year}.LastYear'
+            open3e_read_cycle: 86400
+
+    energy_meter_three_phase:
+        # =============================================================================
+        # Zweck:
+        #   Vollständige Definition eines dreiphasigen Energiezählers
+        #   einschließlich:
+        #   - Leistung der Phase L1
+        #   - Leistung der Phase L2
+        #   - Leistung der Phase L3
+        #   - Spannung der Phase L1
+        #   - Spannung der Phase L2
+        #   - Spannung der Phase L3
+        #
+        # In der Anwendung zu setzen:
+        #   _ecu
+        #       Relative Referenz auf die ECU.
+        #   _name
+        #       Spezifischer Namensteil des Energiezählers,
+        #       z. B. Stromzähler oder Energiezähler.
+        #   _did
+        #       Basis-DID des dreiphasigen Energiezählers.
+        #
+        # Beispiel:
+        #   stromzaehler:
+        #       _ecu: '...:_ecu1'
+        #       _name: Stromzähler
+        #       _did: 3228
+        #       struct: my.vitocal_250a.energy_meter_three_phase
+        # =============================================================================
+        leistung_l1:
+            name: '{_name} Leistung L1'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did}.PowerL1'
+            open3e_read_cycle: 30
+
+        leistung_l2:
+            name: '{_name} Leistung L2'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did}.PowerL2'
+            open3e_read_cycle: 30
+
+        leistung_l3:
+            name: '{_name} Leistung L3'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did}.PowerL3'
+            open3e_read_cycle: 30
+
+        spannung_l1:
+            name: '{_name} Spannung L1'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did}.VoltageL1'
+            open3e_read_cycle: 60
+
+        spannung_l2:
+            name: '{_name} Spannung L2'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did}.VoltageL2'
+            open3e_read_cycle: 60
+
+        spannung_l3:
+            name: '{_name} Spannung L3'
+            type: num
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '..:{_did}.VoltageL3'
+            open3e_read_cycle: 60
+
     heizkreis:
-        vorlauftemperatur_ist:
-            name_: "{..:_hk} Vorlauftemperatur Ist"
-            type: num
-            open3e_ecu: "..:_ecu"
-            open3e_did_: "{..:_did_vl_ist}.Actual"
-            open3e_read_cycle: 60
-            visu_acl: ro
+        # =============================================================================
+        # Struct: heizkreis
+        #
+        # Zweck:
+        #   Vollständige Definition eines Heizkreises einschließlich:
+        #   - Heizkreisname
+        #   - Vorlauf-Isttemperatur
+        #   - Vorlauf-Solltemperatur
+        #   - externer Vorlauf-Sollwert
+        #   - Rücklauf-Isttemperatur
+        #   - Raumtemperatur
+        #   - Luftfeuchtigkeit
+        #   - Betriebsmodus
+        #   - Betriebsprogramm
+        #   - Raumtemperatur-Sollwerte
+        #   - Heizkreispumpe
+        #   - Mischer
+        #   - Heizkurve
+        #   - Sommersparschwelle
+        #
+        # Beispiel:
+        #   heizkreis1:
+        #       _ecu: '..:_ecu1'
+        #       _name: HK1
+        #       _did_name: 627
+        #       _did_flow_actual: 284
+        #       _did_flow_target: 987
+        #       _did_flow_target_external: 1627
+        #       _did_return_actual: 285
+        #       _did_room_actual: 334
+        #       _did_humidity: 2479
+        #       _did_external_mode: 537
+        #       _did_operation_state: 1415
+        #       _did_room_setpoints: 424
+        #       _did_pump: 401
+        #       _did_mixer: 475
+        #       _did_heating_curve: 880
+        #       _did_summer_saving: 1395
+        #       struct: my.vitocal_250a.heizkreis
+        # =============================================================================
 
-        vorlauftemperatur_soll:
-            name_: "{..:_hk} Vorlauftemperatur Soll"
-            type: num
-            open3e_ecu: "..:_ecu"
-            open3e_did: "..:_did_vl_soll"
-            open3e_read_cycle: 300
-            visu_acl: ro
+        name:
+            type: str
+            open3e_ecu: '..:_ecu'
+            open3e_did: '..:_did_name'
+            open3e_read_cycle: 86400
 
-        ruecklauftemperatur:
-            name_: "{..:_hk} Rücklauftemperatur Ist"
+        vorlauf_ist:
+            name_: '{..:_name} Vorlauftemperatur Ist'
             type: num
-            open3e_ecu: "..:_ecu"
-            open3e_did_: "{..:_did_rl}.Actual"
+
+            _name_: '{..:_name} Vorlauftemperatur Ist'
+            _did_desc: MixerOneCircuitFlowTemperatureSensor
+            _ecu: ..:_ecu
+            _did: ..:_did_flow_actual
+            _read_cycle: 60
+
+            struct: .sensor_short
+
+        vorlauf_soll:
+            name_: '{..:_name} Vorlauftemperatur Soll'
+            type: num
+            open3e_write: true
+            open3e_ecu: '..:_ecu'
+            open3e_did: '..:_did_flow_target'
             open3e_read_cycle: 60
-            visu_acl: ro
+
+        vorlauf_min_max:
+            name: '{..:_name} Vorlauftemperatur Grenzen'
+            type: dict
+            open3e_ecu: '..:_ecu'
+            open3e_did: '..:_did_flow_minmax'
+            open3e_read_cycle: 3600
+
+        vorlauf_soll_extern:
+            name_: '{..:_name} Vorlauf Sollwert extern'
+            type: num
+            open3e_write: true
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '{..:_did_flow_target_external}'
+            open3e_read_cycle: 60
+            _did_desc: ExternalMixerOneCircuitFixedValueTargetTemperatureSetpoint
+
+        # TODO: Nicht montiert
+        ruecklauf_ist:
+            name_: '{..:_name} Rücklauftemperatur Ist'
+            type: num
+
+            _name_: '{..:_name} Rücklauftemperatur Ist'
+            _did_desc: MixerOneCircuitReturnTemperatureSensor
+            _ecu: ..:_ecu
+            _did: ..:_did_return_actual
+            _read_cycle: 60
+
+            struct: .sensor_short
+
+        # TODO: Nicht montiert
+        raumtemperatur_ist:
+            name_: '{..:_name} Raumtemperatur Ist'
+            type: num
+
+            _name_: '{..:_name} Raumtemperatur Ist'
+            _did_desc: MixerOneCircuitRoomTemperatureSensor
+            _ecu: ..:_ecu
+            _did: ..:_did_room_actual
+            _read_cycle: 60
+
+            struct: .sensor_short
 
         raumtemperatur_soll:
-            name_:  "{..:_hk} Raumtemperatur Soll (Standard)"
-            type: num
-            open3e_ecu: "..:_ecu"
-            open3e_did_: "{..:_did_raumtemp_soll}.Standard"
+            _read_cycle: 300
+
+            komfort:
+                name_: '{...:_name} Komforttemperatur'
+                type: num
+                open3e_ecu: '...:_ecu'
+                open3e_did_: '{...:_did_room_setpoints}.Comfort'
+                open3e_read_cycle: ..:_read_cycle
+
+            standard:
+                name_: '{...:_name} Standardtemperatur'
+                type: num
+                open3e_ecu: '...:_ecu'
+                open3e_did_: '{...:_did_room_setpoints}.Standard'
+                open3e_read_cycle: ..:_read_cycle
+
+            reduziert:
+                name_: '{...:_name} reduzierte Temperatur'
+                type: num
+                open3e_ecu: '...:_ecu'
+                open3e_did_: '{...:_did_room_setpoints}.Reduced'
+                open3e_read_cycle: ..:_read_cycle
+
+            raw:
+                name_: '{...:_name} Raumtemperatur-Sollwerte'
+                type: dict
+                open3e_ecu: '...:_ecu'
+                open3e_did: ...:_did_room_setpoints
+                open3e_read_cycle: ..:_read_cycle
+                _did_desc: MixerOneCircuitRoomTemperatureSetpoints
+        
+        # TODO: nicht decodiert 'ff00000004'
+        luftfeuchtigkeit:
+            name: '{_name} relative Luftfeuchtigkeit'
+            type: str
+            open3e_ecu: '..:_ecu'
+            open3e_did: '..:_did_humidity'
             open3e_read_cycle: 300
-            open3e_read_at_init: true
-            visu_acl: rw
+            _did_desc: MixerOneCircuitRoomAirHumiditySensor
 
-        heizkreispumpe_status:
-            name_: "{..:_hk} Heizkreispumpe"
-            type: bool
-            open3e_ecu: "..:_ecu"
-            open3e_did_: "{..:_did_pumpe}.ActualValue"
-            open3e_read_cycle: 20
-            visu_acl: ro
+        betriebsmodus:
+            soll:
+                name_: '{...:_name} Betriebsmodus Soll'
+                type: str
 
-        mischer_position_soll:
-            name_: "{..:_hk} MixerOneCircuitThreeWayValvePositionPercent"
+            ist:
+                name_: '{...:_name} Betriebsmodus Ist'
+                type: str
+
+            raw:
+                name: '{...:_name} Betriebsmodus'
+                type: dict
+                open3e_write: true
+                open3e_ecu: '...:_ecu'
+                open3e_did: ...:_did_external_mode
+                open3e_read_cycle: 60
+                _did_desc: ExternalMixerOneCircuitTargetOperationMode
+                on_update: 
+                  - ..soll = sh..lookup().get(sh..().get('Mode', 0), 'undefined')
+                  - ..ist = sh..lookup().get(sh..().get('State', 0), 'undefined')
+
+                lookup:
+                    type: dict
+                    initial_value: '{0: "Keine", 1: "Aus", 2: "Reduziert", 3: "Normal", 4: "Komfort", 5: "VL-Temp-Soll", 6: "Raumtemp-Soll"}'
+
+        betriebsprogramm:
+            soll:
+                name: '{...:_name} Betriebsprogramm Soll'
+                type: str
+
+            ist:
+                name: '{...:_name} Betriebsprogramm Ist'
+                type: str
+
+            raw:
+                name_: '{...:_name} Betriebsprogramm'
+                type: dict
+                open3e_ecu: '...:_ecu'
+                open3e_did_: '{...:_did_operation_state}'
+                open3e_read_cycle: 60
+                _did_desc: MixerOneCircuitOperationState
+
+                on_update: 
+                  - ..soll = sh..().get('Mode', {}).get('Text', '-')
+                  - ..ist = sh..().get('State', {}).get('Text', '-')
+
+        urlaub:
+            urlaubsphase:
+                name: '{...:_name} Urlaubsphase'
+                description: HolidayPhase
+                type: dict
+                open3e_did: '...:_did_holiday'
+                open3e_ecu: '...:_ecu'
+                open3e_read_cycle: 3600
+
+            urlaubsphase_zuhause:
+                name: '{...:_name} Urlaub-Zuhause Phase'
+                description: HolidayAtHomePhase
+                type: dict
+                open3e_did: '...:_did_holiday_at_home'
+                open3e_ecu: '...:_ecu'
+                open3e_read_cycle: 3600
+
+        pumpe:
+            _ecu: '..:_ecu'
+            _did: '..:_did_pump'
+            _name: '..:_name'
+            _read_cycle: 30
+            struct: .pumpe
+
+        mischer:
+            _ecu: '..:_ecu'
+            _did: '..:_did_mixer'
+            _name: '..:_name'
+            _read_cycle: 30
+            struct: .mischer
+
+        heizkurve:
+            _ecu: '..:_ecu'
+            _did: '..:_did_heating_curve'
+            _name: '..:_name'
+            _read_cycle: 3600
+            struct: .heizkurve
+
+        sommersparschwelle:
+            name: '{_name} Sommersparschwelle'
             type: num
-            open3e_ecu: "..:_ecu"
-            open3e_did_: "{..:_did_mischer}.Setpoint"
-            open3e_read_cycle: 20
-            open3e_read_at_init: true   
-            visu_acl: ro
+            open3e_ecu: '..:_ecu'
+            open3e_did_: '{..:_did_summer_saving}.Temperature'
+            open3e_read_cycle: 3600
 
-        mischer_position_ist:
-            name_: "{..:_hk} MixerOneCircuitThreeWayValvePositionPercent"
+    sensor_full:
+        # =============================================================================
+        # Struct: sensor_full
+        #
+        # Zweck:
+        #   Vollständige Definition eines Sensors einschließlich:
+        #   - Istwert
+        #   - Minimalwert
+        #   - Maximalwert
+        #   - Durchschnittswert
+        #   - Sensorstatus
+        #   - Rohwert des DIDs
+        #
+        # Beispiel:
+        #   sensor_oeltemperatur:
+        #       _did_desc: CompressorInletTemperatureSensor
+        #       _ecu: '...:_ecu1'
+        #       _did: 1772
+        #       _read_cycle: 30
+        #       struct: my.vitocal_250a.sensor_full
+
+        minimum:
+            name_: '{..:name} Minimum'
             type: num
-            open3e_ecu: "..:_ecu"
-            open3e_did_: "{..:_did_mischer}.Actual"
-            open3e_read_cycle: 20
-            open3e_read_at_init: true   
-            visu_acl: ro
 
-    heizkreis_1:
-        vorlauftemperatur_ist:
-            name: HK1 Vorlauftemperatur Ist
+        maximum:
+            name_: '{..:name} Maximum'
             type: num
-            open3e_ecu: ..:.
-            open3e_did: '284.Actual'
-            open3e_read_cycle: 60
-            visu_acl: ro
 
-        vorlauftemperatur_soll:
-            name: HK1 Vorlauftemperatur Soll
+        average:
+            name_: '{..:name} Durchschnitt'
             type: num
-            open3e_ecu: ..:.
-            open3e_did: '987'
-            open3e_read_cycle: 300
-            visu_acl: ro
 
-        ruecklauftemperatur:
-            name: HK1 Rücklauftemperatur Ist
-            type: num
-            open3e_ecu: ..:.
-            open3e_did: '285.Actual'
-            open3e_read_cycle: 60
-            visu_acl: ro
+        sensorstatus:
+            name_: '{..:name} Sensorstatus'
+            type: str
 
-        raumtemperatur_soll:
-            name: HK1 Raumtemperatur Soll (Standard)
-            type: num
-            open3e_ecu: ..:.
-            open3e_did: '424.Standard'
-            open3e_read_cycle: 300
-            visu_acl: rw
+        raw:
+            name_: '{..:name} Raw'
+            type: dict
+            open3e_ecu: ..:_ecu
+            open3e_did: ..:_did
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: ..:_did_desc
+            on_update:
+            - .. = value.get("Actual")
+            - ..minimum = value.get("Minimum")
+            - ..maximum = value.get("Maximum")
+            - ..average = value.get("Average")
+            - ..sensorstatus = value.get("SensorStatus", {}).get("Text", "unknown")
 
-        heizkreispumpe_status:
-            name: HK1 Heizkreispumpe
-            type: bool
-            open3e_ecu: ..:.
-            open3e_did: '401.ActualValue'
-            open3e_read_cycle: 60
-            visu_acl: ro
+    sensor_short:
+        # =============================================================================
+        # Struct: sensor_short
+        #
+        # Zweck:
+        #   Vollständige Definition eines Sensors einschließlich:
+        #   - Istwert
+        #   - Sensorstatus
+        #   - Rohwert des DIDs
+        #
+        # Beispiel:
+        #   sensor_oeltemperatur:
+        #       _did_desc: CompressorInletTemperatureSensor
+        #       _ecu: '...:_ecu1'
+        #       _did: 1772
+        #       _read_cycle: 30
+        #       struct: my.vitocal_250a.sensor_short
 
-    heizkreis_2:
-        vorlauftemperatur_ist:
-            name: HK2 Vorlauftemperatur Ist
-            type: num
-            open3e_ecu: ..:.
-            open3e_did: '286.Actual'
-            open3e_read_cycle: 60
-            visu_acl: ro
+        sensorstatus:
+            name_: '{..:name} - Sensorstatus'
+            type: str
 
-        vorlauftemperatur_soll:
-            name: HK2 Vorlauftemperatur Soll
-            type: num
-            open3e_ecu: ..:.
-            open3e_did: '988'
-            open3e_read_cycle: 300
-            visu_acl: ro
-
-        ruecklauftemperatur:
-            name: HK2 Rücklauftemperatur Ist
-            type: num
-            open3e_ecu: ..:.
-            open3e_did: '287.Actual'
-            open3e_read_cycle: 60
-            visu_acl: ro
-
-        raumtemperatur_soll:
-            name: HK2 Raumtemperatur Soll (Standard)
-            type: num
-            open3e_ecu: ..:.
-            open3e_did: '426.Standard'
-            open3e_read_cycle: 300
-            visu_acl: rw
-
-        heizkreispumpe_status:
-            name: HK2 Heizkreispumpe
-            type: bool
-            open3e_ecu: ..:.
-            open3e_did: '402.ActualValue'
-            open3e_read_cycle: 60
-            visu_acl: ro
+        raw:
+            name_: '{..:name} - Raw'
+            type: dict
+            open3e_ecu: ..:_ecu
+            open3e_did: ..:_did
+            open3e_read_cycle: ..:_read_cycle
+            _did_desc: ..:_did_desc
+            on_update:
+            - .. = value.get("Actual")
+            - ..sensorstatus = value.get("SensorStatus", {}).get("Text", "unknown")        
 
 
 logic_parameters: NONE
