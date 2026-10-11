@@ -12,7 +12,7 @@ plugin:
     tester:
     keywords: viessmann  open3e
     state: ready                    # change to ready when done with development
-    version: 0.0.5                  # Plugin version
+    version: 0.0.6                  # Plugin version
     sh_minversion: 1.12.0            # minimum shNG version to use this plugin
     py_minversion: 3.12
     multi_instance: false           # plugin supports multi instance

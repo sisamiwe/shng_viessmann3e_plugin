@@ -1,359 +1,467 @@
 from __future__ import annotations
 
+import binascii
+import importlib.util
 import json
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from threading import Lock
+from typing import Callable, Optional
 
 # WORKAROUND: Blockade von SmartHomeNG durch udsoncan.setup_logging verhindern
 try:
     import udsoncan
     udsoncan.setup_logging = lambda *args, **kwargs: None
+    from udsoncan.client import Client as UdsClient
+    from udsoncan.services import ReadDataByIdentifier
+    from udsoncan.connections import PythonIsoTpConnection
 except ImportError:
     pass
 
+import can
+from can.interfaces.socketcan import SocketcanBus
+import isotp
+
+from doipclient import DoIPClient
+from doipclient.connectors import DoIPClientUDSConnector
+
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+
 try:
-    from open3e.Open3Eclass import O3Eclass
+    import open3e.Open3Edatapoints
+    import open3e.Open3Eenums
     HAS_OPEN3E = True
 except Exception:
     HAS_OPEN3E = False
 
-START_COB: int = 0x680
-LAST_COB: int = 0x6EF
-START_DID: int = 256
-LAST_DID: int = 4000
+
+DEFAULT_STARTCOB = 0x680
+DEFAULT_LASTCOB = 0x6ef
+DEFAULT_STARTDID = 256
+DEFAULT_LASTDID = 4000
+DEFAULT_MAX_WORKERS = 32
+DEFAULT_DELAY_MS = 20
+
+@dataclass
+class EcuInfo:
+    tx: int
+    devprop: str
 
 
-def _is_error(result: Any) -> bool:
-    """Prueft, ob ein O3Eclass-Ergebnis einen Fehler signalisiert.
-
-    Args:
-        result: Rohergebnis von O3Eclass.readByDid().
-
-    Returns:
-        True, wenn das Ergebnis einen 'ERR/'-Fehler enthaelt.
-    """
-    return (isinstance(result, tuple) and len(result) == 3
-            and isinstance(result[1], str) and result[1].startswith("ERR/"))
+@dataclass
+class EcuScanState:
+    tx: int
+    devprop: str
+    dids_queried: int = 0
+    dids_found: int = 0
+    status: str = "queued"   # queued -> scanning -> done / error
+    error: Optional[str] = None
 
 
-EcuInfo = Tuple[int, int, str]
-"""Tuple: (cob_id, devprop_byte, devprop_name)"""
+class SharedCanContext:
+    """One shared SocketcanBus + can.Notifier for all probed/scanned addresses."""
 
-DidInfo = Tuple[int, int, Any]
-"""Tuple: (did, data_length, raw_data)"""
+    def __init__(self, channel: str):
+        self.bus = SocketcanBus(channel=channel, bitrate=250000)
+        self.notifier = can.Notifier(self.bus, listeners=[], timeout=1.0)
+        self.channel = channel
+
+    def open_stack(self, ecutx: int, ecurx: int) -> isotp.NotifierBasedCanStack:
+        tp_addr = isotp.Address(isotp.AddressingMode.Normal_11bits, txid=ecutx, rxid=ecurx)
+        stack = isotp.NotifierBasedCanStack(
+            bus=self.bus, notifier=self.notifier, address=tp_addr, params=isotp.socketcan.CyclicSendTask.get_default_params() if hasattr(isotp, "socketcan") else {}
+        )
+        return stack
+
+    def close(self):
+        self.notifier.stop()
+        self.bus.shutdown()
+
+
+class DepictDashboard:
+    """Thread-safe sink for per-ECU scan progress, rendered as a rich table."""
+
+    def __init__(self):
+        self._lock = Lock()
+        self._rows: dict = {}
+
+    def add_ecu(self, tx: int, devprop: str):
+        with self._lock:
+            self._rows[tx] = EcuScanState(tx=tx, devprop=devprop)
+
+    def make_callback(self, tx: int) -> Callable[[int, int, int], None]:
+        def _cb(addr: int, queried: int, found: int):
+            with self._lock:
+                row = self._rows.get(addr)
+                if row is not None:
+                    row.dids_queried = queried
+                    row.dids_found = found
+                    row.status = "scanning"
+        return _cb
+
+    def mark_done(self, tx: int):
+        with self._lock:
+            row = self._rows.get(tx)
+            if row is not None:
+                row.status = "done"
+
+    def render(self) -> Table:
+        with self._lock:
+            rows_snapshot = list(self._rows.values())
+        table = Table(title="ECU DID scan")
+        table.add_column("Address")
+        table.add_column("Device")
+        table.add_column("Queried", justify="right")
+        table.add_column("Found", justify="right")
+        table.add_column("Status")
+        for r in sorted(rows_snapshot, key=lambda x: x.tx):
+            table.add_row(hex(r.tx), r.devprop, str(r.dids_queried), str(r.dids_found), r.error or r.status)
+        return table
+
+    def live(self, console: Console) -> Live:
+        return Live(self.render(), console=console, refresh_per_second=4, get_renderable=self.render)
+
+
+def make_client_config(p2_timeout: Optional[float] = None) -> dict:
+    config = dict(udsoncan.configs.default_client_config)
+    if p2_timeout is not None:
+        config['p2_timeout'] = p2_timeout
+    return config
 
 
 class Open3EScanner:
     """Spezialisierte Klasse zum Abscannen des CAN-Busses nach verfügbaren ECUs und DIDs."""
 
-    SCANNER_VERSION = '0.0.2'
+    SCANNER_VERSION = '0.2.0'
 
     def __init__(self, bus: str = "can0", logger: Optional[logging.Logger] = None) -> None:
-        """Initialisiert den Open3E-Scanner.
-
-        Args:
-            bus: CAN-Schnittstellenname (z.B. 'can0').
-            logger: Logger-Instanz. Wird bei None automatisch erstellt.
-        """
         self.bus_name: str = bus
         self.logger: logging.Logger = logger or logging.getLogger("open3e_scanner")
-        self.logger.debug("Open3EScanner initialisiert")
-        
-        self._cached_did_variants: Optional[Dict[int, Dict[int, Any]]] = None
-        self._cached_global_dids: Optional[Dict[int, Any]] = None
-        self._cached_did_enums: Optional[Dict[int, str]] = None
-        self._did_info_cache: Dict[int, Tuple[int, str]] = {}
+        self.logger.debug("Open3EScanner V2 initialisiert")
 
-    def scan_ecus(self, start_cob: int = START_COB, last_cob: int = LAST_COB, test_did: int = START_DID) -> List[EcuInfo]:
-        """Scannt den COB-ID-Bereich ab und liefert eine Liste aller antwortenden ECUs.
+        self.write_simul_file: bool = True
 
-        Args:
-            start_cob: Start-COB-ID fuer den Scan.
-            last_cob: End-COB-ID fuer den Scan.
-            test_did: Test-DID zur Erkennung aktiver ECUs.
+    # ~~~~~~~~~~~~~~~~~~~~~~ utils ~~~~~~~~~~~~~~~~~~~~~~
 
-        Returns:
-            Liste von Tupeln (cob_id, devprop_byte, devprop_name).
-
-        Raises:
-            RuntimeError: Wenn die open3e-Bibliothek nicht verfuegbar ist.
-        """
-        if not HAS_OPEN3E:
-            raise RuntimeError("open3e-Bibliothek nicht verfuegbar.")
-
-        found_ecus: List[EcuInfo] = []
-        self.logger.info(
-            f"Starte ECU-Scan auf Bus '{self.bus_name}' "
-            f"({hex(start_cob)} - {hex(last_cob)})"
-        )
-
+    def read_didenums(self, path) -> dict:
+        dicenums = {}
+        lines = []
+        self.logger.info("read DID enums ...")
         try:
-            from open3e.Open3Eenums import E3Enums
-            devices = E3Enums.get('Devices', {})
-        except Exception:
-            devices = {}
+            with open(path, 'r') as file:
+                lines = file.readlines()
+        except Exception as ex:
+            self.logger.warning("could not read DID enums file %s: %s", path, ex)
 
-        for cob_id in range(start_cob, last_cob + 1):
-            response_id = cob_id + 0x10
-            o3e: Optional[O3Eclass] = None
-
-            try:
-                o3e = O3Eclass(can=self.bus_name, ecutx=cob_id, ecurx=response_id)
-                result = o3e.readByDid(test_did, raw=False)
-
-                if _is_error(result):
-                    continue
-
-                iprop = result[0]
-                devprop_name = devices.get(iprop, str(iprop))
-                self.logger.info(f"ECU gefunden bei COB-ID: {hex(cob_id)} ({devprop_name})")
-                found_ecus.append((cob_id, iprop, devprop_name))
-
-            except Exception as exc:
-                self.logger.debug(f"Keine Antwort von {hex(cob_id)}: {exc}")
-            finally:
-                if o3e is not None:
+        for line in lines:
+            line = line.strip()
+            if line:
+                parts = line.split('(')
+                if len(parts) == 2:
+                    name = parts[0].strip()
+                    num_str = parts[1].split(')')[0].strip()
                     try:
-                        o3e.close()
-                    except Exception:
-                        pass
+                        num = int(num_str)
+                        dicenums[num] = name
+                    except ValueError:
+                        self.logger.debug("could not parse '%s' as an integer", num_str)
+        self.logger.info("%d DIDs listed.", len(dicenums))
+        return dicenums
 
-        self.logger.info(f"Scan beendet. {len(found_ecus)} ECU(s) gefunden: {found_ecus}")
-        return found_ecus
-
-    def scan_ecu_dids(self, cob_id: int, start_did: int = START_DID, last_did: int = LAST_DID) -> List[DidInfo]:
-        """Fragt fuer eine konkrete ECU alle DIDs im angegebenen Bereich ab.
-
-        Args:
-            cob_id: Die COB-ID der ECU.
-            start_did: Start-DID fuer den Scan.
-            last_did: End-DID fuer den Scan.
-
-        Returns:
-            Liste von Tupeln (did, data_length, raw_data).
-
-        Raises:
-            RuntimeError: Wenn die open3e-Bibliothek nicht verfuegbar ist.
-        """
-        if not HAS_OPEN3E:
-            raise RuntimeError("open3e-Bibliothek nicht verfuegbar.")
-
-        ecu_results: List[DidInfo] = []
-        self.logger.info(
-            f"Starte DID-Scan ({start_did}-{last_did}) "
-            f"für ECU {hex(cob_id)}"
-        )
-
-        o3e: Optional[O3Eclass] = None
+    def get_variants_dict(self, o3e_path) -> dict:
+        module_name = "Open3EdatapointsVariants"
+        source = Path(o3e_path, f"{module_name}.py")
+        if not source.is_file():
+            self.logger.info("no codec variants - %s.py not found", module_name)
+            return {}
         try:
-            o3e = O3Eclass(can=self.bus_name, ecutx=cob_id)
+            spec = importlib.util.spec_from_file_location(module_name, source)
+            variants_temp = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(variants_temp)
+            return variants_temp.dataIdentifiers["dids"]
+        except Exception as e:
+            self.logger.error("ERROR getting DID variants: %s", e)
+            return {}
 
-            for did in range(start_did, last_did + 1):
-                try:
-                    result = o3e.readByDid(did, raw=True)
-                    if _is_error(result):
-                        continue
-                    if isinstance(result, tuple) and len(result) >= 3:
-                        value, idstr, did_num = result
-                        if hasattr(value, 'hex'):
-                            raw_data = value.hex()
-                            dlen = len(value)
-                        elif isinstance(value, bytes):
-                            raw_data = value.decode('utf-8', errors='replace')
-                            dlen = len(value)
-                        else:
-                            raw_data = str(value)
-                            dlen = len(str(value)) if hasattr(value, '__len__') else 0
-                        ecu_results.append((did, dlen, value))
-                except Exception:
-                    pass
+    def prop_str(self, iprop: int, e3_devices: dict) -> str:
+        """Helper fallback if prop_str isn't imported from open3e."""
+        return e3_devices.get(iprop, f"Unknown Device ({iprop})")
 
-        except Exception as exc:
-            self.logger.error(f"Fehler beim Scan für ECU {hex(cob_id)}: {exc}")
-        finally:
-            if o3e is not None:
-                try:
-                    o3e.close()
-                except Exception:
-                    pass
+    @staticmethod
+    def did_info(did: int, data_identifiers: dict, did_enums: dict) -> tuple:
+        if did in data_identifiers:
+            didlen = vars(data_identifiers[did])['string_len']
+            idstr = vars(data_identifiers[did])['id']
+            return (didlen, idstr)
+        elif did in did_enums:
+            return (0, did_enums[did])
+        else:
+            return (0, "Unknown")
 
-        self.logger.info(f"Scan für {hex(cob_id)} beendet. {len(ecu_results)} DIDs gefunden")
-        return ecu_results
+    @staticmethod
+    def shex(nbr: int) -> str:
+        return format(nbr, '03x')
 
-    # =========================================================================
-    # 3. DATEIEN SCHREIBEN
-    # =========================================================================
+    # ~~~~~~~~~~~~~~~~~~~~~~ file writers ~~~~~~~~~~~~~~~~~~~~~~
 
-    def write_devices_json(self, ecus: List[EcuInfo], config_dir: Path) -> None:
-        """Schreibt eine devices.json Datei mit den gefundenen ECUs.
+    def write_devices_json(self, ecus: list, config_dir: Path):
 
-        Args:
-            ecus: Liste von Tupeln (cob_id, devprop_byte, devprop_name).
-            config_dir: Verzeichnis für die Ausgabedatei.
-        """
         json_path = config_dir / "devices.json"
+
+        self.logger.info("[SCANNER] write %s ...", json_path)
         result_dict = {}
 
-        for cob_id, devprop_byte, devprop_name in ecus:
-            hex_id = f"0x{cob_id:03x}"
-            dp_file = f"Open3Edatapoints_{cob_id:03x}.py"
-
-            result_dict[hex_id] = {
-                'tx': hex_id,
-                'dpList': dp_file,
-                'prop': devprop_name
-            }
+        for ecu in sorted(ecus, key=lambda e: e.tx):
+            scob = hex(ecu.tx)
+            sdplist = "Open3Edatapoints_" + self.shex(ecu.tx) + ".py"
+            result_dict[scob] = {'tx': scob, 'dpList': sdplist, 'prop': ecu.devprop}
 
         try:
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(result_dict, f, indent=2)
-            self.logger.info(f"devices.json geschrieben mit {len(result_dict)} Geräten")
+            with open(json_path, 'w') as json_file:
+                json.dump(result_dict, json_file, indent=2)
+            self.logger.info(f"[SCANNER] devices.json geschrieben mit {len(result_dict)} Geräten")
         except Exception as exc:
-            self.logger.error(f"Schreiben der devices.json fehlgeschlagen: {exc}")
+            self.logger.error(f"[SCANNER] Schreiben der devices.json fehlgeschlagen: {exc}")
 
-    def write_datapoints_file(self, dids: List[DidInfo], cob_id: int, devprop: str, config_dir: Path) -> None:
-        """Schreibt eine Datapoints-Python-Datei für eine ECU.
+    def write_simul_datafile(self, lstdids: list, cobid: int, devprop: str, config_dir: Path):
+
+        filename = config_dir / ("virtdata_" + self.shex(cobid) + ".txt")
+
+        self.logger.info("[SCANNER] write simulation data file %s ...", filename)
+
+        with open(filename, "w") as file:
+            file.write(f"# {hex(cobid)}:{devprop}\n")
+            for did, dlen, data in lstdids:
+                sdata = binascii.hexlify(data).decode('utf-8')
+                file.write(str(did) + " " + sdata + "\n")
+        self.logger.info("[SCANNER] writing simulation file done.")
+
+    def write_datapoints_file(self, lstdids: list, cobid: int, devprop: str, dicvariants: dict, data_identifiers: dict, did_enums: dict, config_dir: Path):
+        
+        filename = config_dir / ("Open3Edatapoints_" + self.shex(cobid) + ".py")
+        
+        self.logger.info("[SCANNER] write datapoints file %s ...", filename)
+        
+        with open(filename, "w") as file:
+            shead = 'from open3e.Open3Ecodecs import *\n\n'
+            shead += 'dataIdentifiers = {\n'
+            shead += '    \"name\": \"' + str(devprop) + '\",\n'
+            shead += '    \"dids\" :\n'
+            shead += '    {\n'
+            file.write(shead)
+            for did, dlen, data in lstdids:
+                sline = '        ' + str(did) + " : "
+                genlen, idstr = self.did_info(did, data_identifiers, did_enums)
+                if dlen == genlen:
+                    sline += 'None,'
+                elif (varitem := dicvariants.get(did, {}).get(dlen)):
+                    sline += varitem.getCodecString() + ','
+                else:
+                    sline += 'RawCodec(' + str(dlen) + ', \"' + idstr + '\"),'
+                file.write(sline + '\n')
+            file.write('    }\n')
+            file.write('}\n')
+        self.logger.info("[SCANNER] writing datapoints file done.")
+
+    # ~~~~~~~~~~~~~~~~~~~~~~ scan workers ~~~~~~~~~~~~~~~~~~~~~~
+
+    def probe_ecu(self, shared: SharedCanContext, tx: int, e3_devices: dict) -> Optional[EcuInfo]:
+        """Probe one ECU address for DID 256 (BusIdentification) via SocketCAN.
 
         Args:
-            dids: Liste von Tupeln (did, dlen, raw_data).
-            cob_id: COB-ID der ECU.
-            devprop: Geräte-Property (Gerätename).
-            config_dir: Verzeichnis für die Ausgabedatei.
+            shared: Shared CAN context for SocketCAN communication.
+            tx: Transmission CAN ID of the ECU being probed.
+            e3_devices: Dictionary containing device property mappings.
+
+        Returns:
+            Optional[EcuInfo]: An EcuInfo object containing the ECU transmission ID 
+            and resolved device property if it responds successfully; otherwise, None.
         """
-        filename = f"Open3Edatapoints_{cob_id:03x}.py"
-        filepath = config_dir / filename
-        variants = self._get_did_variants()
-        data_identifiers = self._get_global_data_identifiers()
 
+        rx, t0 = tx + 0x10, time.monotonic()
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write('from open3e.Open3Ecodecs import *\n\n')
-                f.write('dataIdentifiers = {\n')
-                f.write(f'    "name": "{devprop}",\n')
-                f.write('    "dids" :\n')
-                f.write('    {\n')
+            conn = PythonIsoTpConnection(shared.open_stack(tx, rx))
+            with UdsClient(conn, config=make_client_config()) as client:
+                try:
+                    response = client.send_request(udsoncan.Request(service=ReadDataByIdentifier, data=b"\x01\x00"))
+                except udsoncan.exceptions.TimeoutException:
+                    self.logger.debug("[SCANNER] probe %s: no response (%.3fs)", hex(tx), time.monotonic() - t0)
+                    return None
+                except udsoncan.exceptions.NegativeResponseException as ex:
+                    self.logger.debug("[SCANNER] probe %s: negative response %s (%.3fs)", hex(tx), getattr(ex.response, "code", "unknown"), time.monotonic() - t0)
+                    return None
 
-                for did, dlen, raw_data in dids:
-                    genlen, idstr = self._did_info(did, data_identifiers)
+            if not response.positive:
+                self.logger.debug("[SCANNER] probe %s: negative response %s", hex(tx), response.code)
+                return None
 
-                    if dlen == genlen:
-                        codec_str = 'None,'
-                    else:
-                        varitem = self._get_variant_codec(did, dlen, variants)
-                        if varitem:
-                            codec_str = varitem + ','
-                        else:
-                            codec_str = f'RawCodec({dlen}, "{idstr}"),'
+            try:
+                iprop = response.data[4]
+            except IndexError:
+                self.logger.warning("[SCANNER] probe %s: malformed positive response (too short): %r", hex(tx), response.data)
+                return None
 
-                    f.write(f'        {did} : {codec_str}\n')
-
-                f.write('    }\n')
-                f.write('}\n')
-
-            self.logger.info(f"Datapoints-Datei geschrieben: {filename} ({len(dids)} DIDs)")
-        except Exception as exc:
-            self.logger.error(f"Schreiben der Datapoints-Datei fehlgeschlagen: {exc}")
-
-    def _get_did_variants(self) -> Dict[int, Dict[int, Any]]:
-        """Lädt die DID-Varianten aus Open3EdatapointsVariants.py (cached)."""
-        if self._cached_did_variants is not None:
-            return self._cached_did_variants
-        
-        try:
-            import open3e
-            import importlib.util
-
-            o3e_path = Path(open3e.Open3Edatapoints.__file__).parent
-            variants_file = o3e_path / "Open3EdatapointsVariants.py"
-
-            if not variants_file.is_file():
-                self._cached_did_variants = {}
-                return self._cached_did_variants
-
-            spec = importlib.util.spec_from_file_location("Open3EdatapointsVariants", variants_file)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-
-            self._cached_did_variants = module.dataIdentifiers.get("dids", {})
-            return self._cached_did_variants
-        except Exception:
-            self._cached_did_variants = {}
-            return self._cached_did_variants
-
-    def _get_variant_codec(self, did: int, dlen: int, variants: Dict[int, Dict[int, Any]]) -> Optional[str]:
-        """Gibt den Codec-String für eine DID-Variante zurück."""
-        if did in variants and dlen in variants[did]:
-            varitem = variants[did][dlen]
-            get_codec_string = getattr(varitem, 'getCodecString', None)
-            if callable(get_codec_string):
-                return get_codec_string()
-        return None
-
-    def _load_did_enums(self) -> Dict[int, str]:
-        """Lädt DidEnums.txt einmalig und cached das Ergebnis."""
-        if self._cached_did_enums is not None:
-            return self._cached_did_enums
-        
-        self._cached_did_enums = {}
-        try:
-            import open3e
-            o3e_path = Path(open3e.Open3Edatapoints.__file__).parent
-            enums_file = o3e_path / "DidEnums.txt"
-            if enums_file.is_file():
-                with open(enums_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if '(' in line:
-                            parts = line.split('(')
-                            if len(parts) == 2:
-                                name = parts[0].strip()
-                                num_str = parts[1].split(')')[0].strip()
-                                try:
-                                    self._cached_did_enums[int(num_str)] = name
-                                except ValueError:
-                                    pass
-        except Exception:
-            pass
-        return self._cached_did_enums
-
-    def _get_global_data_identifiers(self) -> Dict[int, Any]:
-        """Lädt die globalen dataIdentifiers aus Open3Edatapoints.py (cached)."""
-        if self._cached_global_dids is not None:
-            return self._cached_global_dids
-        
-        try:
-            from open3e.Open3Edatapoints import dataIdentifiers
-            self._cached_global_dids = dataIdentifiers.get("dids", {})
-            return self._cached_global_dids
-        except Exception:
-            self._cached_global_dids = {}
-            return self._cached_global_dids
-
-    def _did_info(self, did: int, data_identifiers: Dict[int, Any]) -> Tuple[int, str]:
-        """Gibt (genlen, idstr) für eine DID zurück (cached)."""
-        if did in self._did_info_cache:
-            return self._did_info_cache[did]
-
-        if did in data_identifiers:
-            codec = data_identifiers[did]
-            genlen = getattr(codec, 'string_len', 0)
-            idstr = getattr(codec, 'id', str(did))
-        else:
-            enums = self._load_did_enums()
-            if did in enums:
-                genlen, idstr = 0, enums[did]
-            else:
-                genlen, idstr = 0, "Unknown"
-
-        self._did_info_cache[did] = (genlen, idstr)
-        return genlen, idstr
-
-    def reset(self) -> None:
-        """Setzt alle gecachten Daten zurück."""
-        self._cached_did_variants = None
-        self._cached_global_dids = None
-        self._cached_did_enums = None
-        self._did_info_cache.clear()
-        self.logger.debug("Scanner-Cache zurückgesetzt")
+            devprop = self.prop_str(iprop, e3_devices)
+            self.logger.info("[SCANNER] ECU found: %s : %s (%.3fs)", hex(tx), devprop, time.monotonic() - t0)
+            return EcuInfo(tx=tx, devprop=devprop)
+        except Exception as e:
+            self.logger.warning("[SCANNER] probe %s failed: %s", hex(tx), e)
+            return None
     
+    def scan_ecu_dids(self, shared: SharedCanContext, tx: int, startdid: int, lastdid: int, delay_ms: int = 0) -> list:
+        """Scan DIDs startdid..lastdid on one ECU via SocketCAN.
+
+        Args:
+            shared: Shared CAN context for SocketCAN communication.
+            tx: Transmission CAN ID of the ECU being scanned.
+            startdid: Starting Data Identifier (DID).
+            lastdid: Ending Data Identifier (DID).
+            delay_ms: Optional pacing pause in milliseconds between requests.
+
+        Returns:
+            list: A list of tuples containing found (did, dlen, data).
+        """
+        rx, lstfounds = tx + 0x10, []
+        try:
+            conn = PythonIsoTpConnection(shared.open_stack(tx, rx))
+            with UdsClient(conn, config=make_client_config(p2_timeout=3)) as client:
+                for did in range(startdid, lastdid + 1):
+                    t0 = time.monotonic()
+                    try:
+                        response = client.send_request(udsoncan.Request(service=ReadDataByIdentifier, data=did.to_bytes(2, byteorder='big')))
+                        if response.positive:
+                            dlen = len(response) - 3
+                            if dlen > 0:
+                                data = response.data[2:]
+                                lstfounds.append((did, dlen, data))
+                                self.logger.debug("[SCANNER] DID %s/%d: found len=%d (%.3fs)", hex(tx), did, dlen, time.monotonic() - t0)
+                            else:
+                                self.logger.debug("[SCANNER] DID %s/%d: empty positive response, treated as not present (%.3fs)", hex(tx), did, time.monotonic() - t0)
+                    except udsoncan.exceptions.NegativeResponseException:
+                        self.logger.debug("[SCANNER] DID %s/%d: not present (%.3fs)", hex(tx), did, time.monotonic() - t0)
+                    except Exception as e:
+                        self.logger.warning("[SCANNER] DID %s/%d: error %s", hex(tx), did, e)
+                    
+                    if delay_ms > 0:
+                        time.sleep(delay_ms / 1000.0)
+        except Exception as e:
+            self.logger.error("[SCANNER] ECU %s: scan setup failed: %s", hex(tx), e)
+            return []
+
+        self.logger.info("[SCANNER] %d DIDs found on %s.", len(lstfounds), hex(tx))
+        return lstfounds
+
+    # ~~~~~~~~~~~~~~~~~~~~~~ orchestration ~~~~~~~~~~~~~~~~~~~~~~
+
+    def run_discovery(
+        self,
+        startcob: int,
+        lastcob: int,
+        shared: SharedCanContext,
+        workers: int,
+        e3_devices: dict,
+    ) -> list:
+        """Run discovery to scan a range of CAN IDs for active ECUs via SocketCAN.
+
+        Args:
+            startcob: Starting CAN ID.
+            lastcob: Ending CAN ID.
+            shared: Shared CAN context for SocketCAN communication.
+            workers: Maximum number of worker threads.
+            e3_devices: Dictionary containing device property mappings.
+
+        Returns:
+            list: A sorted list of EcuInfo objects representing responding ECUs.
+        """
+        addrs, found, done_count = list(range(startcob, lastcob + 1)), [], 0
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="probe") as ex:
+            futures = {ex.submit(self.probe_ecu, shared, tx, e3_devices): tx for tx in addrs}
+            for fut in as_completed(futures):
+                info, done_count = fut.result(), done_count + 1
+                if info is not None:
+                    found.append(info)
+        found.sort(key=lambda e: e.tx)
+        return found
+
+    def run_did_scans(
+        self,
+        ecus: list,
+        shared: SharedCanContext,
+        startdid: int,
+        lastdid: int,
+        workers: int,
+        delay_ms: int = 0,
+    ) -> dict:
+        """Run DID scans across multiple ECUs concurrently via SocketCAN.
+
+        Args:
+            ecus: List of EcuInfo objects to scan.
+            shared: Shared CAN context for SocketCAN communication.
+            startdid: Starting Data Identifier (DID).
+            lastdid: Ending Data Identifier (DID).
+            workers: Maximum number of worker threads.
+            delay_ms: Optional pacing pause in milliseconds between requests.
+
+        Returns:
+            dict: A dictionary mapping ECU transmission IDs to their found DIDs.
+        """
+        results = {}
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="didscan") as ex:
+            futures = {ex.submit(self.scan_ecu_dids, shared, e.tx, startdid, lastdid, delay_ms): e for e in ecus}
+            for fut in as_completed(futures):
+                e = futures[fut]
+                try:
+                    results[e.tx] = fut.result()
+                except Exception as e_inner:
+                    self.logger.error("ECU %s: DID scan failed: %s", hex(e.tx), e_inner)
+        return results
+
+    # ~~~~~~~~~~~~~~~~~~~~~~ depict ~~~~~~~~~~~~~~~~~~~~~~
+
+    def depict_system(self, config_dir: Path) -> None:
+        """Depict the system by scanning the CAN bus for active ECUs and their DIDs, 
+        then writing configuration and data files.
+
+        Args:
+            config_dir: Directory path where output configuration files are stored.
+        """
+        if not HAS_OPEN3E:
+            self.logger.error("Open3E package is missing. Cannot depict system.")
+            return
+
+        t_start = time.monotonic()
+        data_identifiers = dict(open3e.Open3Edatapoints.dataIdentifiers["dids"])
+        e3_devices = open3e.Open3Eenums.E3Enums['Devices']
+
+        open3e_path = Path(open3e.Open3Eenums.__file__).parent
+        did_enums = self.read_didenums(open3e_path / "DidEnums.txt")
+        did_variants = self.get_variants_dict(open3e_path)
+
+        shared = SharedCanContext(self.bus_name)
+        try:
+            discovery_workers = min(DEFAULT_MAX_WORKERS, DEFAULT_LASTCOB - DEFAULT_STARTCOB + 1)
+            ecus = self.run_discovery(DEFAULT_STARTCOB, DEFAULT_LASTCOB, shared, discovery_workers, e3_devices)
+            self.logger.info(f"[SCANNER] {len(ecus)} responding ECUs found.")
+
+            self.write_devices_json(ecus, config_dir=config_dir)
+            
+            did_workers = min(DEFAULT_MAX_WORKERS, max(len(ecus), 1))
+            results = self.run_did_scans(ecus, shared, DEFAULT_STARTDID, DEFAULT_LASTDID, did_workers, delay_ms=DEFAULT_DELAY_MS)
+
+            for e in ecus:
+                lstdids = results.get(e.tx, [])
+                if self.write_simul_file:
+                    self.write_simul_datafile(lstdids, e.tx, e.devprop, config_dir=config_dir)
+                self.write_datapoints_file(lstdids, e.tx, e.devprop, did_variants, data_identifiers, did_enums, config_dir=config_dir)
+        
+            elapsed = time.monotonic() - t_start
+            self.logger.info(f"[SCANNER] depict system finalized within {int(elapsed)}s with: {ecus=}, {results=}")
+
+        finally:
+            if shared is not None:
+                shared.close()

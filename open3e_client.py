@@ -98,7 +98,7 @@ class Open3EClient:
         self._name_to_did_map.clear()
         if hasattr(self, '_cached_data_identifiers'):
             del self._cached_data_identifiers
-        self.logger.info("Verbindung getrennt.")
+        self.logger.debug("Verbindung getrennt.")
 
     # =========================================================================
     # CALLBACK-VERWALTUNG & EVENT-DISPATCHING
