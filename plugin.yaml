@@ -12,12 +12,12 @@ plugin:
     tester:
     keywords: viessmann  open3e
     state: ready                    # change to ready when done with development
-    version: 0.0.6                  # Plugin version
-    sh_minversion: 1.12.0            # minimum shNG version to use this plugin
+    version: 0.1.0                  # Plugin version
+    sh_minversion: 1.12.0           # minimum shNG version to use this plugin
     py_minversion: 3.12
     multi_instance: false           # plugin supports multi instance
     restartable: true
-    classname: Open3E            # class containing the plugin
+    classname: Open3E               # class containing the plugin
     support: 
 
 parameters:
@@ -36,13 +36,6 @@ parameters:
             de: 'CAN-Bus-Port, mit dem das Gerät verbunden ist'
             en: 'CAN bus port the device is connected to'
     
-    read_cycle:
-        type: num
-        default: 60
-        description:
-            de: 'Standard-Intervall in Sekunden für das Lesekommando'
-            en: 'Default interval in seconds for the read command'
-
     read_all_at_init:
         type: bool
         default: true

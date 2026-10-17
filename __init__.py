@@ -29,8 +29,6 @@ CAN-Bus (SocketCAN/can0). Das Plugin unterstützt sowohl das zyklische Auslesen
 von Datenbezeichnern (DIDs) als auch das Schreiben von Werten auf Befehl.
 """
 
-# TODO: Wenn Sensor nicht verfügbar, dann Item auf None setzen (statt Wert zu behalten) Lese DID 3015: Ergebnis = ({'Actual': 0.0, 'Minimum': 0.0, 'Maximum': 0.0, 'Average': 0.0, 'SensorStatus': {'ID': 4, 'Text': 'not_available'}}, 'HeatSinkTemperatureSensor', 3015)
-
 from __future__ import annotations
 
 import sys
@@ -65,10 +63,11 @@ class Open3E(SmartPlugin):
         ALLOW_MULTIINSTANCE (bool): Flag, ob Mehrfachinstanzen erlaubt sind.
     """
 
-    PLUGIN_VERSION = '0.0.6'
+    PLUGIN_VERSION = '0.1.0'
     ALLOW_MULTIINSTANCE = False
     
     DEFAULT_COB: int = 0x680
+    DEFAULT_DID: int = 256
     SCAN_SCHEDULER_DELAY: int = 20
 
 
@@ -85,7 +84,6 @@ class Open3E(SmartPlugin):
         super().__init__(*args, **kwargs)
 
         self.canport = self.get_parameter_value('can_port')
-        self.default_read_cycle = self.get_parameter_value('read_cycle')
         self._pause_item_path = self.get_parameter_value('pause_item')
         self.read_all_at_init = bool(self.get_parameter_value('read_all_at_init'))
  
@@ -101,7 +99,7 @@ class Open3E(SmartPlugin):
         # State initialization
         self._pause_item = None
         self.clients: Dict[int, Dict[str, Any]] = {}
-        self.ecu_dids: Dict = {}
+
         self._update_active: bool = False
         self._initial_item_read_done: bool = False
         self._filter_cache: Optional[List] = None
@@ -182,7 +180,7 @@ class Open3E(SmartPlugin):
             Optional[Callable]: Die Update-Methode des Plugins (`self.update_item`), falls
             Schreibfunktionen oder das Pause-Item aktiv sind, andernfalls `None`.
         """
-        # 1. Sonderfall: Pause-Item
+        # Sonderfall: Pause-Item
         if item.property.path == self._pause_item_path:
             self.logger.debug(f"Pause item '{item.property.path}' registriert")
             self._pause_item = item
@@ -196,7 +194,7 @@ class Open3E(SmartPlugin):
             self.add_item(item, updating=True)
             return self.update_item
         
-        # 2. Attribute auslesen
+        # Attribute auslesen
         open3e_read_at_init = bool(self.get_iattr_value(item.conf, 'open3e_read_at_init'))
         open3e_read_cycle = int(self.get_iattr_value(item.conf, 'open3e_read_cycle') or 0)
         open3e_write = bool(self.get_iattr_value(item.conf, 'open3e_write'))
@@ -207,9 +205,10 @@ class Open3E(SmartPlugin):
         if not (open3e_read_at_init or open3e_read_cycle > 0 or open3e_write):
             return None
 
+        # Setze read_at_init
         open3e_read_at_init = open3e_read_at_init or self.read_all_at_init
 
-        # 3. ECU & DID verarbeiten
+        # ECU & DID verarbeiten
         raw_ecu = self.get_iattr_value(item.conf, 'open3e_ecu')
         item_path = item.property.path 
 
@@ -239,7 +238,7 @@ class Open3E(SmartPlugin):
                 self.logger.warning(f"DID {did} definiert in {item_path} wird von ECU {ecu} nicht unterstützt. Item wird passiv gesetzt und nicht bedient.")
                 item_active = False
 
-        # 4. Kombinierte Konfiguration erstellen
+        # Kombinierte Konfiguration erstellen
         is_read_active = open3e_read_at_init or open3e_read_cycle > 0
         nexttime = 0.0 if open3e_read_at_init else (time.time() + open3e_read_cycle if open3e_read_cycle > 0 else 0.0)
 
@@ -258,7 +257,7 @@ class Open3E(SmartPlugin):
 
         self.logger.debug(f"parse_item [READ={is_read_active}, WRITE={open3e_write}]: {item.property.path} -> {item_config}")
 
-        # 5. Item EINMALIG registrieren
+        # Item EINMALIG registrieren
         self.add_item(item, mapping=(ecu, did), config_data_dict=item_config, updating=open3e_write)
 
         # Wenn open3e_write aktiv ist, muss update_item als Listener zurückgegeben werden
@@ -373,7 +372,7 @@ class Open3E(SmartPlugin):
         except Exception as exc:
             self.logger.error(f"Fehler beim verzögerten Nachlesen von DID {did}: {exc}")
 
-    def check_non_active_items(self):
+    def check_non_active_items(self) -> None:
         """Check non-active items against discovered ECUs and their supported DIDs."""
 
         self.logger.info("Check check_non_active_items")
@@ -501,7 +500,7 @@ class Open3E(SmartPlugin):
     def poll_all_data(self, ecu: Optional[int] = None) -> None:
         """Liest alle DIDs von allen oder einer spezifischen ECU."""
         if ecu is not None:
-            target_ecus = [self.clients[ecu]] if ecu in self.clients else []
+            target_ecus = [self.clients.get(ecu)] if ecu in self.clients else []
         else:
             target_ecus = list(self.clients.values())
 
@@ -608,8 +607,8 @@ class Open3E(SmartPlugin):
 
     def get_active_cyclic_items(self) -> list:
         """Gibt alle Items zurueck, die fuer die zyklische Abfrage konfiguriert sind."""
-        _read_cylce_items = self._filter_items(filter_key="read_cycle", filter_value=0, op='>')
-        return list(set(_read_cylce_items) & set(self.get_active_items()))
+        _read_cycle_items = self._filter_items(filter_key="read_cycle", filter_value=0, op='>')
+        return list(set(_read_cycle_items) & set(self.get_active_items()))
 
     def get_active_init_items(self) -> list:
         """Gibt alle Items zurueck, die bei Start initiert werden sollen."""
@@ -639,7 +638,6 @@ class Open3E(SmartPlugin):
             module_name = file_path.stem
             spec = importlib.util.spec_from_file_location(module_name, file_path)
             module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
             spec.loader.exec_module(module)
         except Exception as exc:
             self.logger.error(f"Laden von '{file_name}' fehlgeschlagen: {exc}")
@@ -682,7 +680,12 @@ class Open3E(SmartPlugin):
                 continue
 
             dids = dp_data.get("dids", {})
-            devices[int(dev_id, 16)] = {
+            try:
+                dev_key = int(dev_id, 16)
+            except ValueError:
+                self.logger.warning(f"Ungültige Geräte-ID '{dev_id}' in Konfiguration. Überspringe.")
+                continue
+            devices[dev_key] = {
                 "tx": tx,
                 "prop": prop,
                 "name": dp_data.get("name", prop),
@@ -694,7 +697,7 @@ class Open3E(SmartPlugin):
         self.logger.info("--------------------------------")
         return devices
 
-    def load_config(self):
+    def load_config(self) -> None:
         self.devices: Dict[str, Dict[str, Any]] = self.load_devices(DEFAULT_CONFIG_FILE)
     
         if not self.devices:
@@ -713,7 +716,7 @@ class Open3E(SmartPlugin):
         """
         
         def handler(did_id: int, did_name: str, value: Any) -> None:
-            self.logger.debug(f"[{dev_name}] DID {did_id} ({did_name}) = {value!r}")
+            # self.logger.debug(f"[{dev_name}] DID {did_id} ({did_name}) = {value!r}")
 
             # O(1) lookup - returns only items for this specific (ECU, DID) combo
             did_items = self.get_items_for_mapping(mapping=(dev_addr, did_id))
@@ -722,7 +725,7 @@ class Open3E(SmartPlugin):
                 config = self.get_item_config(item)
                 sub_path = config.get("sub_path")
 
-                self.logger.debug(f"update_handler: Item {item.property.path} matched for DID {did_id}")
+                # self.logger.debug(f"update_handler: Item {item.property.path} matched for DID {did_id}")
 
                 if sub_path is not None and value is not None:
                     item_val = self._resolve_path(value, sub_path)
@@ -742,7 +745,11 @@ class Open3E(SmartPlugin):
         for dev_key, dev_info in self.devices.items():
             dev_name = dev_info.get("name", dev_key)
             try:
-                tx_addr = int(dev_info["tx"], 16)
+                try:
+                    tx_addr = int(dev_info["tx"], 16)
+                except (ValueError, KeyError):
+                    self.logger.error(f"Ungültige TX-Adresse '{dev_info.get('tx')}' für Gerät '{dev_name}'. Überspringe.")
+                    continue
                 dp_file = dev_info["dp_file"]
                 dp_full_path = dev_info["dp_path"]
 
@@ -781,6 +788,18 @@ class Open3E(SmartPlugin):
                 self.logger.error(f"Fehler beim Trennen von '{dev_name}': {e}")
         
         self.clients.clear()
+
+    def interview_all_ecus(self):
+        for ecu in self.devices:
+            target_client = self._get_client(ecu)
+            if target_client is None:
+                self.logger.error(f"interview_all_ecus: Kein aktiver Client fuer Geraet '{ecu}' gefunden.")
+                continue
+
+            try:
+                self.devices_info[ecu] = target_client.read_did(self.DEFAULT_DID)
+            except Exception as e:
+                self.logger.error(f"Fehler beim Auslesen von ECU '{ecu}' (DID: {self.DEFAULT_DID}): {e}")
 
     # =========================================================================
     # HILFSMETHODEN
@@ -898,7 +917,7 @@ class Open3E(SmartPlugin):
                 return None
         return self.scanner
 
-    def depict_system(self, config_dir: Path | None = None):
+    def depict_system(self, config_dir: Path | None = None) -> None:
 
         if not config_dir:
             config_dir = self.config_data_path
@@ -925,5 +944,5 @@ class Open3E(SmartPlugin):
         
         finally:
             self.logger.warning(f"Plugin {self.get_fullname()} will be resumed.")
-            self.logger.info(f"Scan von abgeschlossen.")
+            self.logger.info("Scan abgeschlossen.")
             self.run()

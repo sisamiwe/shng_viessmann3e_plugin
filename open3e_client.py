@@ -50,9 +50,9 @@ class Open3EClient:
         self.e3_address: int = e3_address
         self.logger: logging.Logger = logger or logging.getLogger("open3e_client")
 
-        self.logger.info(
-            f"Initialisiere Client für Bus='{self.bus_name}', "
-            f"devtype='{self.devtype}', E3-Adresse={hex(self.e3_address)}"
+        self.logger.debug(
+            "Initialisiere Client für Bus='%s', devtype='%s', E3-Adresse=%s",
+            self.bus_name, self.devtype, hex(self.e3_address)
         )
 
         self.o3e: Optional[O3Eclass] = None
@@ -67,11 +67,22 @@ class Open3EClient:
 
     @property
     def connected(self) -> bool:
-        """True, wenn eine aktive Verbindung besteht."""
+        """Prüft, ob eine aktive Verbindung zur ECU besteht.
+
+        Returns:
+            bool: True wenn verbunden, False otherwise.
+        """
         return self.o3e is not None
 
     def connect(self) -> None:
-        """Baut die UDS/CAN-Verbindung auf und initialisiert O3Eclass."""
+        """Baut die UDS/CAN-Verbindung auf und initialisiert O3Eclass.
+
+        Erstellt eine neue O3Eclass-Instanz mit den beim Konstruktor
+        angegebenen Parametern und baut das interne Name-to-DID-Mapping auf.
+
+        Raises:
+            Exception: Wenn die Verbindung nicht hergestellt werden kann.
+        """
         self.logger.debug(
             f"Starte O3Eclass für Bus='{self.bus_name}', "
             f"devtype='{self.devtype}', E3-Adresse={hex(self.e3_address)}"
@@ -85,7 +96,14 @@ class Open3EClient:
             raise
 
     def disconnect(self) -> None:
-        """Trennt die Verbindung und gibt die O3Eclass-Instanz frei."""
+        """Trennt die Verbindung und gibt die O3Eclass-Instanz frei.
+
+        Schließt die CAN-Verbindung, bereinigt den Cache und setzt den
+        internen State zurück. Ist kein Fehler, wenn bereits getrennt.
+
+        Returns:
+            None
+        """
         if self.o3e is None:
             return
 
@@ -95,9 +113,10 @@ class Open3EClient:
             self.logger.warning(f"Fehler beim Schließen der Verbindung: {exc}")
 
         self.o3e = None
-        self._name_to_did_map.clear()
-        if hasattr(self, '_cached_data_identifiers'):
-            del self._cached_data_identifiers
+        with self._cb_lock:
+            self._name_to_did_map.clear()
+            if hasattr(self, '_cached_data_identifiers'):
+                del self._cached_data_identifiers
         self.logger.debug("Verbindung getrennt.")
 
     # =========================================================================
@@ -211,11 +230,15 @@ class Open3EClient:
 
         try:
             data_list = self.o3e.readAll(raw=False) or []
-            self.logger.debug(f"Lese alle DIDs: {len(data_list)} Eintraege")
+            self.logger.debug("Lese alle DIDs: %d Eintraege", len(data_list))
 
-            for did, value, idstr in data_list:
-                self.data[did] = {"value": value, "idstr": idstr}
-                self._emit(did, idstr, value)
+            for item in data_list:
+                if isinstance(item, (tuple, list)) and len(item) >= 3:
+                    did, value, idstr = item[:3]
+                    self.data[did] = {"value": value, "idstr": idstr}
+                    self._emit(did, idstr, value)
+                else:
+                    self.logger.warning("Unerwartetes DID-Format in readAll: %r", item)
             return data_list
         except Exception as exc:
             self.logger.error(f"Fehler beim Lesen aller DIDs: {exc}", exc_info=True)
@@ -299,7 +322,8 @@ class Open3EClient:
         Returns:
             Die DID-Nummer oder None, falls nicht gefunden.
         """
-        return self._name_to_did_map.get(name.lower())
+        with self._cb_lock:
+            return self._name_to_did_map.get(name.lower())
 
     def read_by_name(self, name: str) -> Optional[Any]:
         """Liest einen einzelnen Datenpunkt anhand seines Klartext-Namens.
@@ -379,7 +403,16 @@ class Open3EClient:
         }
 
     def _get_data_identifiers(self) -> Optional[Dict[int, Any]]:
-        """Gibt das dataIdentifiers-Dict der O3Eclass-Instanz zurueck."""
+        """Gibt das dataIdentifiers-Dict der O3Eclass-Instanz zurück.
+
+        Nutzt einen Cache, um wiederholte Attribut-Zugriffe zu vermeiden.
+        Das Dictionary wird beim erstmaligen Zugriff gecacht und bis zum
+        nächsten disconnect() wiederverwendet.
+
+        Returns:
+            Optional[Dict[int, Any]]: Dictionary mit DID-Nummern als Keys
+            und Codec-Objekten als Values, oder None falls nicht verbunden.
+        """
         if self.o3e:
             if not hasattr(self, '_cached_data_identifiers'):
                 self._cached_data_identifiers = getattr(self.o3e, "dataIdentifiers", None)
@@ -387,14 +420,22 @@ class Open3EClient:
         return None
 
     def _build_name_cache(self) -> None:
-        """Baut das Name-to-DID Mapping fur schnellen O(1) Zugriff auf."""
-        dids = self._get_data_identifiers()
-        if not dids:
-            self._name_to_did_map.clear()
-            return
+        """Baut das Name-to-DID Mapping für schnellen O(1) Zugriff auf.
 
-        self._name_to_did_map = {
-            str(getattr(codec, "id", None)).lower(): did
-            for did, codec in dids.items()
-            if getattr(codec, "id", None)
-        }
+        Erstellt ein Dictionary, das Klartext-DID-Namen auf ihre numerischen
+        IDs abbildet. Thread-sicher durch internen Lock geschützt.
+
+        Returns:
+            None
+        """
+        dids = self._get_data_identifiers()
+        with self._cb_lock:
+            if not dids:
+                self._name_to_did_map.clear()
+                return
+
+            self._name_to_did_map = {
+                str(getattr(codec, "id", None)).lower(): did
+                for did, codec in dids.items()
+                if getattr(codec, "id", None)
+            }
