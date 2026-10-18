@@ -36,6 +36,7 @@ import time
 import datetime
 import json
 import importlib.util
+import subprocess
 from typing import Any, Dict, List, Tuple, Callable, Optional, Union
 from pathlib import Path
 from collections import defaultdict
@@ -89,7 +90,7 @@ class Open3E(SmartPlugin):
  
         # Dependency & configuration validation
         if not HAS_OPEN3E:
-            self.logger.error("open3e-Bibliothek nicht verfuegbar. Plugin wird nicht gestartet.")
+            self.logger.error("open3e-Bibliothek nicht verfuegbar. Automatischer Installationsversuch gescheitert")
             self._init_complete = False
 
         # Config Data Path
@@ -112,6 +113,7 @@ class Open3E(SmartPlugin):
 
         # init WebIF
         self.init_webinterface(WebInterface)
+         
 
     # =========================================================================
     # PLUGIN CORE

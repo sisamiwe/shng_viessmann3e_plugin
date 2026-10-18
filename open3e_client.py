@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 import logging
 import threading
+import subprocess
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # WORKAROUND: Blockade von SmartHomeNG durch udsoncan.setup_logging verhindern
@@ -11,11 +13,34 @@ try:
 except ImportError:
     pass
 
+
+# Automatischer Installations-Versuch, falls open3e noch nicht in der venv ist
+HAS_OPEN3E = False
+O3Eclass = None
+
 try:
     from open3e.Open3Eclass import O3Eclass
     HAS_OPEN3E = True
-except Exception:
-    HAS_OPEN3E = False
+except (ImportError, ModuleNotFoundError):
+    logger_init = logging.getLogger("open3e_client")
+    logger_init.warning("Open3E nicht gefunden. Versuche automatische Installation von GitHub...")
+    try:
+        subprocess.check_call([
+            sys.executable, 
+            "-m", 
+            "pip", 
+            "install", 
+            "git+https://github.com/open3e/open3e.git"
+        ])
+        
+        # Nach erfolgreicher Installation nochmals versuchen zu importieren
+        from open3e.Open3Eclass import O3Eclass
+        HAS_OPEN3E = True
+        logger_init.info("Open3E erfolgreich automatisch installiert und geladen.")
+    except Exception as exc:
+        logger_init.error(f"Automatische Installation von Open3E fehlgeschlagen: {exc}")
+        HAS_OPEN3E = False
+
 
 CallbackType = Callable[[int, str, Any], None]
 """Signatur: ``callback(did_id: int, did_name: str, value: Any) -> None``."""
@@ -24,7 +49,7 @@ CallbackType = Callable[[int, str, Any], None]
 class Open3EClient:
     """Kompakter Wrapper um :class:`open3e.Open3Eclass.O3Eclass`."""
 
-    CLIENT_VERSION = '0.0.1'
+    CLIENT_VERSION = '0.1.0'
 
     # =========================================================================
     # LEBENSZYKLUS & VERBINDUNG (Lifecycle & Connection)
