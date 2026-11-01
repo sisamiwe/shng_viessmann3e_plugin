@@ -53,8 +53,8 @@ DEFAULT_CONFIG_FILE: str = "devices.json"
 DEFAULT_CONFIG_VAR_SUB_PATH: str = 'plugin_data'
 
 
-class Open3E(SmartPlugin):
-    """Hauptklasse des Open3E SmartHomeNG Plugins.
+class Viessmann3E(SmartPlugin):
+    """Hauptklasse des Viessmann3E SmartHomeNG Plugins.
 
     Handhabt die Verbindung zum CAN-Bus, verwaltet die Endgeräte und verbindet
     SmartHomeNG-Items mit den Datenbezeichnern (DIDs) der Open3E-Schnittstelle.
@@ -64,11 +64,11 @@ class Open3E(SmartPlugin):
         ALLOW_MULTIINSTANCE (bool): Flag, ob Mehrfachinstanzen erlaubt sind.
     """
 
-    PLUGIN_VERSION = '0.1.0'
+    PLUGIN_VERSION = '0.1.1'
     ALLOW_MULTIINSTANCE = False
     
     DEFAULT_COB: int = 0x680
-    DEFAULT_DID: int = 256
+    BUS_IDENTIFICATION_DID: int = 256
     SCAN_SCHEDULER_DELAY: int = 20
 
 
@@ -108,8 +108,11 @@ class Open3E(SmartPlugin):
         self._filter_cache_value: Any = None
         self._filter_cache_op: str = ''
 
+        # open3e version
+        self.open3e_version: str = self.get_open3e_version()
+
         # Load Devices
-        self.load_config()
+        self.devices: Dict[str, Dict[str, Any]] = self.load_config()
 
         # init WebIF
         self.init_webinterface(WebInterface)
@@ -133,6 +136,9 @@ class Open3E(SmartPlugin):
         if self.devices:
             # Verbindung aufbauen
             self.connect_to_devices()
+
+            # interview
+            self.interview_all_ecus()
 
             # Scheduler für zyklische Abfragen erstellen
             self.setup_scheduler()
@@ -699,13 +705,15 @@ class Open3E(SmartPlugin):
         self.logger.info("--------------------------------")
         return devices
 
-    def load_config(self) -> None:
-        self.devices: Dict[str, Dict[str, Any]] = self.load_devices(DEFAULT_CONFIG_FILE)
+    def load_config(self) -> Dict[str, Dict[str, Any]]:
+        devices = self.load_devices(DEFAULT_CONFIG_FILE)
     
-        if not self.devices:
+        if not devices:
             self.logger.warning("Es sind keine E3 Geräte konfiguriert. Nach dem Start von shNG wird automatisch ein Scan durchgeführt.")
         else:
-            self.logger.info(f"Es sind {len(self.devices)} E3 Geräte konfiguriert.")
+            self.logger.info(f"Es sind {len(devices)} E3 Geräte konfiguriert.")
+
+        return devices
    
     # =========================================================================
     # GERÄTEVERBINDUNG & DATENHANDLER
@@ -799,9 +807,9 @@ class Open3E(SmartPlugin):
                 continue
 
             try:
-                self.devices_info[ecu] = target_client.read_did(self.DEFAULT_DID)
+                self.devices[ecu]['info'] = target_client.read_did(self.BUS_IDENTIFICATION_DID)
             except Exception as e:
-                self.logger.error(f"Fehler beim Auslesen von ECU '{ecu}' (DID: {self.DEFAULT_DID}): {e}")
+                self.logger.error(f"Fehler beim Auslesen von ECU '{ecu}' (DID: {self.BUS_IDENTIFICATION_DID}): {e}")
 
     # =========================================================================
     # HILFSMETHODEN
@@ -905,6 +913,12 @@ class Open3E(SmartPlugin):
 
         return data
 
+    def get_open3e_version(self) -> str:
+        try:
+            return importlib.metadata.version("open3e")
+        except Exception:
+            return "unknown"
+
     # =========================================================================
     # SCANNER / ENTDECKUNG
     # =========================================================================
@@ -948,3 +962,23 @@ class Open3E(SmartPlugin):
             self.logger.warning(f"Plugin {self.get_fullname()} will be resumed.")
             self.logger.info("Scan abgeschlossen.")
             self.run()
+
+    # =========================================================================
+    # ÖFFENTLICHE FUNKTIONEN
+    # =========================================================================
+
+    def read_did_at_ecu(self, ecu: Any, raw_did: Any):
+        target_client = self._get_client(ecu)
+        if target_client is None:
+            self.logger.error(f"read_did_at_ecu: Kein aktiver Client fuer Geraet '{ecu}' gefunden.")
+            return None
+
+        did, subpath = self._resolve_did(raw_did)
+        result = None
+        
+        try:
+            result = target_client.read_did(did)
+        except Exception as e:
+            self.logger.error(f"Fehler beim Auslesen von ECU '{ecu}' (DID: {did}): {e}")
+
+        return result

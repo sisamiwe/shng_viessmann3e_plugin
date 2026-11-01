@@ -4,6 +4,7 @@ import sys
 import logging
 import threading
 import subprocess
+import importlib.metadata
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # WORKAROUND: Blockade von SmartHomeNG durch udsoncan.setup_logging verhindern
@@ -464,3 +465,4 @@ class Open3EClient:
                 for did, codec in dids.items()
                 if getattr(codec, "id", None)
             }
+        
