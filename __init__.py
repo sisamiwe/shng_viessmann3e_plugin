@@ -22,7 +22,7 @@
 #
 #########################################################################
 
-"""Open3E Plugin für SmartHomeNG.
+"""Viessmann3E Plugin für SmartHomeNG.
 
 Ermöglicht die Anbindung von Heizsystemen und Steuerungen via Open3E über den
 CAN-Bus (SocketCAN/can0). Das Plugin unterstützt sowohl das zyklische Auslesen
@@ -64,7 +64,7 @@ class Viessmann3E(SmartPlugin):
         ALLOW_MULTIINSTANCE (bool): Flag, ob Mehrfachinstanzen erlaubt sind.
     """
 
-    PLUGIN_VERSION = '0.1.1'
+    PLUGIN_VERSION = '0.1.2'
     ALLOW_MULTIINSTANCE = False
     
     DEFAULT_COB: int = 0x680
@@ -73,7 +73,7 @@ class Viessmann3E(SmartPlugin):
 
 
     def __init__(self, sh=None, *args, standalone: str = '', logger=None, **kwargs) -> None:
-        """Initialisiert die Open3E-Plugin-Instanz.
+        """Initialisiert die Viessmann3E-Plugin-Instanz.
 
         Args:
             sh: Instanz des SmartHomeNG-Kernobjekts (nur im SHNG-Betrieb).
